@@ -1,12 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Check } from 'lucide-react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 
@@ -15,6 +12,15 @@ export default function NewJournalPage() {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [saving, setSaving] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-resize textarea as content grows
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
+    }
+  }, [content]);
 
   const handleSave = async () => {
     if (!content.trim()) {
@@ -57,35 +63,57 @@ export default function NewJournalPage() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl px-8 py-12">
-      <div className="mb-8 flex items-center justify-between">
+    <div className="mx-auto max-w-[900px] px-6 py-12">
+      {/* Back and Save buttons - inline, subtle */}
+      <div className="mb-12 flex items-center justify-between">
         <Link
           href="/journals"
-          className="flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          className="group flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
-          <ArrowLeft className="h-4 w-4" />
-          Back
+          <ArrowLeft className="h-3.5 w-3.5 transition-transform group-hover:-translate-x-0.5" />
+          <span>Back</span>
         </Link>
-        <Button onClick={handleSave} disabled={!content.trim() || saving}>
-          {saving ? 'Saving...' : 'Save'}
-        </Button>
+
+        <button
+          onClick={handleSave}
+          disabled={!content.trim() || saving}
+          className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed enabled:hover:bg-accent/50 enabled:text-foreground text-muted-foreground"
+        >
+          {saving ? (
+            <>
+              <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              <span>Saving...</span>
+            </>
+          ) : (
+            <>
+              <Check className="h-3.5 w-3.5" />
+              <span>Save</span>
+            </>
+          )}
+        </button>
       </div>
 
-      <div className="space-y-6">
-        <Input
+      {/* Editor - calm, spacious */}
+      <div className="space-y-8 pb-24">
+        {/* Title input - large, elegant */}
+        <input
           type="text"
-          placeholder="Title (optional)"
+          placeholder="Untitled"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          className="border-0 bg-transparent px-0 text-2xl placeholder:text-muted-foreground/40 focus-visible:ring-0"
+          className="w-full border-0 bg-transparent px-0 text-4xl font-semibold leading-tight tracking-tight text-foreground placeholder:text-muted-foreground/20 focus:outline-none focus:ring-0"
+          style={{ caretColor: 'hsl(var(--foreground))' }}
         />
 
-        <Textarea
+        {/* Body textarea - auto-expanding, no internal scroll */}
+        <textarea
+          ref={textareaRef}
           placeholder="Start writing..."
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          className="min-h-[500px] resize-none border-0 bg-transparent px-0 text-base leading-relaxed placeholder:text-muted-foreground/40 focus-visible:ring-0"
+          className="min-h-[60vh] w-full resize-none overflow-hidden border-0 bg-transparent px-0 text-lg leading-[1.8] text-foreground placeholder:text-muted-foreground/20 focus:outline-none focus:ring-0"
           autoFocus
+          style={{ caretColor: 'hsl(var(--foreground))' }}
         />
       </div>
     </div>

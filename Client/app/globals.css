@@ -4,26 +4,30 @@
 
 @layer base {
   :root {
-    --background: 0 0% 7%;
-    --foreground: 0 0% 88%;
-    --card: 0 0% 10%;
-    --card-foreground: 0 0% 88%;
-    --popover: 0 0% 10%;
-    --popover-foreground: 0 0% 88%;
+    /* Refined dark palette for calming aesthetic */
+    --background: 0 0% 6%;        /* #0f0f0f - deep charcoal, not pure black */
+    --foreground: 0 0% 90%;       /* #e5e5e5 - off-white, easy on eyes */
+    --card: 0 0% 9%;              /* #171717 - slightly elevated */
+    --card-foreground: 0 0% 90%;
+    --popover: 0 0% 9%;
+    --popover-foreground: 0 0% 90%;
     --primary: 220 15% 65%;
-    --primary-foreground: 0 0% 7%;
-    --secondary: 0 0% 14%;
-    --secondary-foreground: 0 0% 88%;
-    --muted: 0 0% 14%;
-    --muted-foreground: 0 0% 58%;
-    --accent: 220 15% 25%;
-    --accent-foreground: 0 0% 88%;
+    --primary-foreground: 0 0% 6%;
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 90%;
+    --muted: 0 0% 12%;
+    --muted-foreground: 0 0% 42%;  /* #6b6b6b - subtle gray */
+    --accent: 220 15% 20%;
+    --accent-foreground: 0 0% 90%;
     --destructive: 0 60% 50%;
     --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 18%;
-    --input: 0 0% 18%;
-    --ring: 220 15% 65%;
+    --border: 0 0% 16%;           /* #2a2a2a - barely visible */
+    --input: 0 0% 16%;
+    --ring: 220 15% 50%;          /* Softer focus ring */
     --radius: 0.5rem;
+    
+    /* Editor-specific colors */
+    --editor-surface: 0 0% 9.5%;  /* #181818 - writing canvas */
   }
 }
 
@@ -35,14 +39,56 @@
   body {
     @apply bg-background text-foreground;
     font-feature-settings: 'rlig' 1, 'calt' 1;
+    letter-spacing: -0.011em;
   }
 
   h1, h2, h3, h4, h5, h6 {
-    @apply font-medium tracking-tight;
+    @apply font-semibold tracking-tight;
+    letter-spacing: -0.022em;
   }
 
   input, textarea {
     @apply text-foreground;
+    transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Calm focus states */
+  *:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px hsl(var(--ring) / 0.3);
+    transition: box-shadow 180ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Smooth transitions for interactive elements */
+  button, a {
+    transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* Subtle scrollbar styling */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.2) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.2);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.3);
+    background-clip: padding-box;
   }
 }
 

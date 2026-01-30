@@ -29,31 +29,35 @@ export default async function JournalDetailPage({
   }
 
   return (
-    <div className="mx-auto max-w-3xl px-8 py-12">
+    <div className="mx-auto max-w-[900px] px-6 py-12">
+      {/* Back button - inline, subtle */}
       <div className="mb-12">
         <Link
           href="/journals"
-          className="inline-flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          className="group inline-flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
-          <ArrowLeft className="h-4 w-4" />
-          Back to journals
+          <ArrowLeft className="h-3.5 w-3.5 transition-transform group-hover:-translate-x-0.5" />
+          <span>Back to journals</span>
         </Link>
       </div>
 
+      {/* Article content - calm, spacious */}
       <article className="space-y-8">
-        <header className="space-y-4 border-b border-border pb-8">
-          <time className="text-sm text-muted-foreground">
-            {formatJournalDate(journal.created_at)}
-          </time>
-          {journal.title && (
-            <h1 className="text-3xl tracking-tight text-foreground">
-              {journal.title}
-            </h1>
-          )}
-        </header>
+        {/* Metadata - subtle */}
+        <time className="block text-sm text-muted-foreground/60">
+          {formatJournalDate(journal.created_at)}
+        </time>
 
-        <div className="prose prose-invert prose-lg max-w-none">
-          <p className="whitespace-pre-wrap leading-relaxed text-foreground">
+        {/* Title - large, elegant */}
+        {journal.title && (
+          <h1 className="text-4xl font-semibold leading-tight tracking-tight text-foreground">
+            {journal.title}
+          </h1>
+        )}
+
+        {/* Content - generous spacing, calm */}
+        <div className="prose prose-invert max-w-none">
+          <p className="whitespace-pre-wrap text-lg leading-[1.8] text-foreground/95">
             {journal.content}
           </p>
         </div>
