@@ -33,11 +33,36 @@ export async function middleware(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user && !request.nextUrl.pathname.startsWith('/login') && !request.nextUrl.pathname.startsWith('/register')) {
+  const isAuthPage = request.nextUrl.pathname.startsWith('/login') || 
+                     request.nextUrl.pathname.startsWith('/register');
+  const isVerifyPage = request.nextUrl.pathname.startsWith('/verify-email');
+  const isCallbackPage = request.nextUrl.pathname.startsWith('/auth/callback');
+
+  if (!user && !isAuthPage && !isVerifyPage && !isCallbackPage) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
 
-  if (user && (request.nextUrl.pathname === '/login' || request.nextUrl.pathname === '/register' || request.nextUrl.pathname === '/')) {
+  // Redirect authenticated users away from auth pages
+  if (user && isAuthPage) {
+    // Check if email is verified
+    if (!user.email_confirmed_at) {
+      return NextResponse.redirect(new URL(`/verify-email?email=${encodeURIComponent(user.email || '')}`, request.url));
+    }
+    return NextResponse.redirect(new URL('/journals', request.url));
+  }
+
+  // Redirect authenticated but unverified users to verify-email (except if already there)
+  if (user && !user.email_confirmed_at && !isVerifyPage && !isAuthPage) {
+    return NextResponse.redirect(new URL(`/verify-email?email=${encodeURIComponent(user.email || '')}`, request.url));
+  }
+
+  // Redirect verified users away from verify page
+  if (user && user.email_confirmed_at && isVerifyPage) {
+    return NextResponse.redirect(new URL('/journals', request.url));
+  }
+
+  // Redirect to journals from root if authenticated and verified
+  if (user && user.email_confirmed_at && request.nextUrl.pathname === '/') {
     return NextResponse.redirect(new URL('/journals', request.url));
   }
 
