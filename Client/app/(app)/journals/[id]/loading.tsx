@@ -3,28 +3,34 @@ import { ArrowLeft } from 'lucide-react';
 
 export default function JournalDetailLoading() {
     return (
-        <div className="mx-auto max-w-3xl px-8 py-12">
+        <div className="mx-auto max-w-[900px] px-6 py-12">
+            {/* Back button skeleton - inline, subtle */}
             <div className="mb-12">
                 <div className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-                    <ArrowLeft className="h-4 w-4" />
+                    <ArrowLeft className="h-3.5 w-3.5" />
                     Back to journals
                 </div>
             </div>
 
+            {/* Article content skeleton - calm, spacious */}
             <article className="space-y-8">
-                <header className="space-y-4 border-b border-border pb-8">
-                    <Skeleton className="h-5 w-48" />
-                    <Skeleton className="h-9 w-3/4" />
-                </header>
+                {/* Timestamp skeleton - subtle */}
+                <Skeleton className="h-4 w-64" />
 
-                <div className="space-y-4">
-                    <Skeleton className="h-5 w-full" />
-                    <Skeleton className="h-5 w-full" />
-                    <Skeleton className="h-5 w-5/6" />
-                    <Skeleton className="h-5 w-full" />
-                    <Skeleton className="h-5 w-4/5" />
-                    <Skeleton className="h-5 w-full" />
-                    <Skeleton className="h-5 w-3/4" />
+                {/* Title skeleton - large */}
+                <Skeleton className="h-12 w-3/4" />
+
+                {/* Content skeleton - generous spacing */}
+                <div className="space-y-4 pt-4">
+                    <Skeleton className="h-6 w-full" />
+                    <Skeleton className="h-6 w-full" />
+                    <Skeleton className="h-6 w-11/12" />
+                    <Skeleton className="h-6 w-full" />
+                    <Skeleton className="h-6 w-5/6" />
+                    <Skeleton className="h-6 w-full" />
+                    <Skeleton className="h-6 w-4/5" />
+                    <Skeleton className="h-6 w-full" />
+                    <Skeleton className="h-6 w-3/4" />
                 </div>
             </article>
         </div>

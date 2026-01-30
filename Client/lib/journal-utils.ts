@@ -2,12 +2,15 @@ import { format } from 'date-fns';
 import type { Journal } from '@/lib/supabase/types';
 
 /**
- * Format a date string to a readable format
+ * Format a date string to a readable format with time
  * @param dateString - ISO date string
- * @returns Formatted date like "Monday, January 29, 2026"
+ * @returns Formatted date like "Monday, January 30, 2026 • 10:31 PM"
  */
 export function formatJournalDate(dateString: string): string {
-  return format(new Date(dateString), 'EEEE, MMMM d, yyyy');
+  const date = new Date(dateString);
+  const dateStr = format(date, 'EEEE, MMMM d, yyyy');
+  const timeStr = format(date, 'h:mm a');
+  return `${dateStr} • ${timeStr}`;
 }
 
 /**
