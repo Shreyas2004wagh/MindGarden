@@ -9,8 +9,8 @@ func MountRoutes(r chi.Router) {
 	r.Get("/healthz", handlers.HealthCheck)
 	
 	// Initialize services (Simple global init for MVP)
-	// handlers.InitServices()
+	handlers.InitServices()
 
-	// r.Post("/ingest", handlers.IngestJournal)
-	// r.Post("/ask", handlers.AskAI)
+	r.Post("/ingest", handlers.IngestJournal)
+	r.Post("/ask", handlers.AskAI)
 }
