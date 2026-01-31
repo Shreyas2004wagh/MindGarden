@@ -11,6 +11,10 @@ func MountRoutes(r chi.Router) {
 	// Initialize services (Simple global init for MVP)
 	handlers.InitServices()
 
+	// Journal endpoints
+	r.Post("/journals", handlers.CreateJournal)
+
+	// AI/RAG endpoints
 	r.Post("/ingest", handlers.IngestJournal)
 	r.Post("/ask", handlers.AskAI)
 }

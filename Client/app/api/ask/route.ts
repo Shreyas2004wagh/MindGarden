@@ -37,10 +37,10 @@ export async function POST(request: NextRequest) {
 3. Find relevant passages from your past reflections
 4. Generate a thoughtful, personalized answer based on your own writing
 
-To enable this feature, connect this endpoint to your FastAPI backend that implements:
-- Vector embeddings for journal content
-- Semantic search across entries
-- LLM-powered response generation based on retrieved context`;
+To enable this feature, connect this endpoint to the Go backend that implements:
+- Vector embeddings for journal content (Gemini)
+- Semantic search across entries (custom vector store)
+- LLM-powered response generation (Groq)`;
 
     return NextResponse.json({ answer });
   } catch (error) {

@@ -1,6 +1,12 @@
-__pycache__/
-*.py[cod]
-*$py.class
-venv/
+# Go binary
+bin/
+
+# Vector store data
+storage/
+
+# Environment variables
 .env
+.env.local
+
+# System files
 .DS_Store

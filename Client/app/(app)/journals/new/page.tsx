@@ -32,24 +32,33 @@ export default function NewJournalPage() {
     try {
       const supabase = createClient();
       const {
-        data: { user },
-      } = await supabase.auth.getUser();
+        data: { session },
+      } = await supabase.auth.getSession();
 
-      if (!user) {
+      if (!session) {
         toast.error('You must be logged in to save a journal');
         router.push('/login');
         return;
       }
 
-      const { error } = await supabase
-        .from('journals')
-        .insert({
-          user_id: user.id,
+      // Call Go backend API instead of direct Supabase insert
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+      const response = await fetch(`${apiUrl}/journals`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
           title: title.trim() || null,
           content: content.trim(),
-        } as any);
+        }),
+      });
 
-      if (error) throw error;
+      if (!response.ok) {
+        const errorData = await response.text();
+        throw new Error(errorData || 'Failed to save journal entry');
+      }
 
       toast.success('Journal entry saved successfully!');
       router.push('/journals');

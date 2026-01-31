@@ -1,0 +1,374 @@
+package handlers
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math/big"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/supabase-community/gotrue-go"
+)
+
+var (
+	gotrueClient *gotrue.Client
+	gotrueOnce   sync.Once
+)
+
+var (
+	jwksCache     map[string]interface{} // Can store both *ecdsa.PublicKey and *rsa.PublicKey
+	jwksCacheMu   sync.RWMutex
+	jwksCacheTime time.Time
+	jwksCacheTTL  = 1 * time.Hour
+)
+
+type JWKS struct {
+	Keys []JWK `json:"keys"`
+}
+
+type JWK struct {
+	Kid string `json:"kid"`
+	Kty string `json:"kty"`
+	Alg string `json:"alg"`
+	Use string `json:"use"`
+	Crv string `json:"crv"` // For EC keys
+	X   string `json:"x"`   // For EC keys
+	Y   string `json:"y"`   // For EC keys
+	N   string `json:"n"`   // For RSA keys
+	E   string `json:"e"`   // For RSA keys
+}
+
+func initGoTrueClient() {
+	gotrueOnce.Do(func() {
+		supabaseURL := os.Getenv("SUPABASE_URL")
+		if supabaseURL != "" {
+			gotrueClient = gotrue.New(supabaseURL, os.Getenv("SUPABASE_ANON_KEY"))
+		}
+	})
+}
+
+func verifySupabaseJWT(tokenString string) (string, error) {
+	// Initialize GoTrue client if available
+	initGoTrueClient()
+	
+	// Try using GoTrue client for ES256 tokens
+	if gotrueClient != nil {
+		user, err := gotrueClient.GetUser(context.Background(), tokenString)
+		if err == nil && user != nil && user.ID != "" {
+			return user.ID, nil
+		}
+		// If GoTrue fails, continue to fallback methods
+	}
+
+	// Parse token first to check the algorithm
+	unverifiedToken, _, err := new(jwt.Parser).ParseUnverified(tokenString, jwt.MapClaims{})
+	if err != nil {
+		return "", fmt.Errorf("token parse error: %w", err)
+	}
+
+	alg, _ := unverifiedToken.Header["alg"].(string)
+
+	// Try JWT secret for HS256 tokens
+	jwtSecret := os.Getenv("SUPABASE_JWT_SECRET")
+	if jwtSecret != "" && alg == "HS256" {
+		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+			}
+			return []byte(jwtSecret), nil
+		})
+
+		if err != nil {
+			if errors.Is(err, jwt.ErrTokenExpired) {
+				return "", errors.New("token has expired")
+			}
+			if errors.Is(err, jwt.ErrTokenSignatureInvalid) {
+				return "", errors.New("invalid token signature")
+			}
+			return "", fmt.Errorf("token validation failed: %w", err)
+		}
+
+		if token.Valid {
+			claims, ok := token.Claims.(jwt.MapClaims)
+			if !ok {
+				return "", errors.New("invalid token claims format")
+			}
+
+			sub, ok := claims["sub"].(string)
+			if !ok || sub == "" {
+				return "", errors.New("token missing sub claim")
+			}
+
+			return sub, nil
+		}
+	}
+
+	// For ES256/RS256 tokens, use JWT_SECRET as the public key
+	// In Supabase, JWT_SECRET contains the public key for ES256 verification
+	if jwtSecret != "" && (alg == "ES256" || alg == "RS256") {
+		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+			// For ES256, the JWT_SECRET is the public key
+			if _, ok := token.Method.(*jwt.SigningMethodECDSA); ok {
+				// Parse the JWT_SECRET as PEM-encoded public key
+				publicKey, err := jwt.ParseECPublicKeyFromPEM([]byte(jwtSecret))
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse EC public key: %w", err)
+				}
+				return publicKey, nil
+			}
+			// For RS256
+			if _, ok := token.Method.(*jwt.SigningMethodRSA); ok {
+				publicKey, err := jwt.ParseRSAPublicKeyFromPEM([]byte(jwtSecret))
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse RSA public key: %w", err)
+				}
+				return publicKey, nil
+			}
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		})
+
+		if err != nil {
+			if errors.Is(err, jwt.ErrTokenExpired) {
+				return "", errors.New("token has expired")
+			}
+			if errors.Is(err, jwt.ErrTokenSignatureInvalid) {
+				return "", errors.New("invalid token signature")
+			}
+			// If can't parse as PEM, fall through to JWKS
+			if !strings.Contains(err.Error(), "failed to parse") {
+				return "", fmt.Errorf("token validation failed: %w", err)
+			}
+		} else if token.Valid {
+			claims, ok := token.Claims.(jwt.MapClaims)
+			if !ok {
+				return "", errors.New("invalid token claims format")
+			}
+
+			sub, ok := claims["sub"].(string)
+			if !ok || sub == "" {
+				return "", errors.New("token missing sub claim")
+			}
+
+			return sub, nil
+		}
+	}
+
+	// Last resort: try JWKS approach
+	supabaseURL := os.Getenv("SUPABASE_URL")
+	if supabaseURL == "" {
+		return "", errors.New("server configuration error: SUPABASE_URL not set")
+	}
+
+	kid, ok := unverifiedToken.Header["kid"].(string)
+	if !ok {
+		return "", errors.New("token missing kid header (required for JWKS verification)")
+	}
+
+	// Get public key for kid
+	publicKey, err := getPublicKey(supabaseURL, kid)
+	if err != nil {
+		return "", fmt.Errorf("authentication service error: %w", err)
+	}
+	if err != nil {
+		// This is a server/configuration error, not a bad token
+		return "", fmt.Errorf("authentication service error: %w", err)
+	}
+	if err != nil {
+		// This is a server/configuration error, not a bad token
+		return "", fmt.Errorf("authentication service error: %w", err)
+	}
+
+	// Parse and verify token
+	parsedToken, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		// Accept both ECDSA and RSA signing methods
+		switch token.Method.(type) {
+		case *jwt.SigningMethodECDSA:
+			return publicKey, nil
+		case *jwt.SigningMethodRSA:
+			return publicKey, nil
+		default:
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+	})
+
+	if err != nil {
+		// Check if it's an expiration error
+		if errors.Is(err, jwt.ErrTokenExpired) {
+			return "", errors.New("token has expired")
+		}
+		return "", fmt.Errorf("token verification failed: %w", err)
+	}
+
+	if !parsedToken.Valid {
+		return "", errors.New("invalid token signature")
+	}
+
+	// Extract user_id from claims
+	claims, ok := parsedToken.Claims.(jwt.MapClaims)
+	if !ok {
+		return "", errors.New("invalid token claims format")
+	}
+
+	sub, ok := claims["sub"].(string)
+	if !ok || sub == "" {
+		return "", errors.New("token missing sub claim")
+	}
+
+	return sub, nil
+}
+
+func getPublicKey(supabaseURL, kid string) (interface{}, error) {
+	// Check cache
+	jwksCacheMu.RLock()
+	if time.Since(jwksCacheTime) < jwksCacheTTL {
+		if key, ok := jwksCache[kid]; ok {
+			jwksCacheMu.RUnlock()
+			return key, nil
+		}
+	}
+	jwksCacheMu.RUnlock()
+
+	// Get Supabase API key
+	supabaseAnonKey := os.Getenv("SUPABASE_ANON_KEY")
+	if supabaseAnonKey == "" {
+		return nil, errors.New("SUPABASE_ANON_KEY not configured")
+	}
+
+	// Fetch JWKS with proper authentication
+	// Supabase JWKS endpoint is at /.well-known/jwks.json
+	jwksURL := fmt.Sprintf("%s/.well-known/jwks.json", strings.TrimRight(supabaseURL, "/"))
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	req, err := http.NewRequest("GET", jwksURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create JWKS request: %w", err)
+	}
+
+	// Add required Supabase API key header
+	req.Header.Set("apikey", supabaseAnonKey)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("JWKS fetch failed with status %d (check SUPABASE_ANON_KEY)", resp.StatusCode)
+	}
+
+	var jwks JWKS
+	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+		return nil, fmt.Errorf("failed to decode JWKS: %w", err)
+	}
+
+	// Update cache
+	jwksCacheMu.Lock()
+	defer jwksCacheMu.Unlock()
+
+	jwksCache = make(map[string]interface{})
+	for _, jwk := range jwks.Keys {
+		var key interface{}
+		var err error
+
+		if jwk.Kty == "EC" {
+			key, err = jwkToECPublicKey(jwk)
+		} else if jwk.Kty == "RSA" {
+			key, err = jwkToRSAPublicKey(jwk)
+		} else {
+			continue
+		}
+
+		if err != nil {
+			continue
+		}
+		jwksCache[jwk.Kid] = key
+	}
+	jwksCacheTime = time.Now()
+
+	key, ok := jwksCache[kid]
+	if !ok {
+		return nil, fmt.Errorf("key with kid %s not found in JWKS", kid)
+	}
+
+	return key, nil
+}
+
+func jwkToECPublicKey(jwk JWK) (*ecdsa.PublicKey, error) {
+	xBytes, err := base64.RawURLEncoding.DecodeString(jwk.X)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode x: %w", err)
+	}
+
+	yBytes, err := base64.RawURLEncoding.DecodeString(jwk.Y)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode y: %w", err)
+	}
+
+	x := new(big.Int).SetBytes(xBytes)
+	y := new(big.Int).SetBytes(yBytes)
+
+	var curve elliptic.Curve
+	switch jwk.Crv {
+	case "P-256":
+		curve = elliptic.P256()
+	case "P-384":
+		curve = elliptic.P384()
+	case "P-521":
+		curve = elliptic.P521()
+	default:
+		return nil, fmt.Errorf("unsupported curve: %s", jwk.Crv)
+	}
+
+	return &ecdsa.PublicKey{
+		Curve: curve,
+		X:     x,
+		Y:     y,
+	}, nil
+}
+
+func jwkToRSAPublicKey(jwk JWK) (interface{}, error) {
+	// RSA support can be added here if needed
+	return nil, fmt.Errorf("RSA keys not yet supported")
+}
+
+func insertJournal(ctx context.Context, id, userID string, title *string, content string, createdAt time.Time) (*JournalResponse, error) {
+	db := getDB()
+	if db == nil {
+		return nil, errors.New("database not initialized")
+	}
+
+	query := `
+		INSERT INTO journals (id, user_id, title, content, created_at)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, user_id, title, content, created_at, updated_at
+	`
+
+	journal := &JournalResponse{}
+	err := db.QueryRowContext(ctx, query, id, userID, title, content, createdAt).Scan(
+		&journal.ID,
+		&journal.UserID,
+		&journal.Title,
+		&journal.Content,
+		&journal.CreatedAt,
+		&journal.UpdatedAt,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("database insert failed: %w", err)
+	}
+
+	return journal, nil
+}
