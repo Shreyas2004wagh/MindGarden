@@ -13,16 +13,15 @@ journals → embeddings → retrieval → grounded AI answers.
 Establish a **trusted application backend** that can securely interact with Supabase and support AI/RAG workflows.
 
 ### Core Tasks
-- [ ] Create FastAPI backend repository / folder
-- [ ] Set up Python environment
-  - Virtual environment
-  - `requirements.txt`
-- [ ] Connect FastAPI to Supabase PostgreSQL
-- [ ] Verify Supabase JWT in FastAPI
-- [ ] Implement basic health check endpoint
+- [x] Create Go backend repository / folder
+- [x] Set up Go environment and dependencies
+- [x] Implement Chi router with middleware
+- [ ] Connect Go backend to Supabase PostgreSQL
+- [ ] Verify Supabase JWT in Go
+- [x] Implement basic health check endpoint
 
 ### Outcome
-✅ Backend exists  
+✅ Backend exists (Go)  
 ✅ Authentication is trusted  
 ✅ Ready to accept journal + AI workloads  
 
@@ -34,11 +33,11 @@ This is the **starting point of RAG**.
 If this is incorrect, AI answers will be unreliable.
 
 ### Required Tasks
-- [ ] Backend endpoint to receive journal content
-- [ ] Chunk journal text (300–500 tokens, with overlap)
+- [x] Backend endpoint to receive journal content
+- [x] Chunk journal text (handled by vector store)
 - [ ] Store chunk metadata in PostgreSQL
-- [ ] Generate embeddings for each chunk
-- [ ] Persist embeddings into FAISS (per user)
+- [x] Generate embeddings for each chunk (using Gemini)
+- [x] Persist embeddings into vector store (disk-based JSON)
 
 ### Notes
 - Chunking must preserve order (`chunk_index`)
@@ -47,32 +46,43 @@ If this is incorrect, AI answers will be unreliable.
   - journal_id
 - No cross-user data access is allowed
 
+### Implementation
+- Go handler: `internal/api/handlers/ingest.go`
+- LLM service: `internal/service/llm/service.go`
+- Vector store: `internal/service/vector/store.go`
+
 ### Outcome
 ✅ Journals become **machine-understandable**  
 ✅ Foundation for semantic search is complete  
 
 ---
 
-## 🧩 C. Vector Store (FAISS) Layer
+## 🧩 C. Vector Store Layer
 
 ### Goal
 Enable **fast, private, semantic retrieval** of journal content.
 
 ### Required Tasks
-- [ ] Create per-user FAISS index
-- [ ] Load FAISS index from disk on request
-- [ ] Save FAISS index back to disk after updates
-- [ ] Add embeddings to FAISS index
+- [x] Create vector store implementation
+- [x] Load vector store from disk on request
+- [x] Save vector store back to disk after updates
+- [x] Add embeddings to vector store
 - [ ] Delete embeddings when a journal is deleted
+- [ ] Implement per-user vector store isolation
 
 ### Constraints
-- One FAISS index per user
-- No shared/global index
+- One vector store per user (currently global for MVP)
+- No shared/global index in production
 - Stored on disk for persistence
+
+### Implementation
+- Custom Go vector store with cosine similarity search
+- Disk persistence via JSON serialization
+- Location: `internal/service/vector/store.go`
 
 ### Outcome
 ✅ Semantic search works  
-✅ User data is fully isolated  
+🚧 User data isolation needed for production  
 
 ---
 
@@ -81,20 +91,25 @@ Enable **fast, private, semantic retrieval** of journal content.
 This is the **core differentiator** of Mind Garden.
 
 ### Required Tasks
-- [ ] Implement `/ask` endpoint in FastAPI
-- [ ] Embed the user’s question
-- [ ] Retrieve top-k relevant chunks from FAISS
-- [ ] Construct grounded RAG prompt
-- [ ] Call LLM using Groq API
-- [ ] Return answer and metadata (e.g., journal dates)
+- [x] Implement `/ask` endpoint in Go
+- [x] Embed the user's question (using Gemini)
+- [x] Retrieve top-k relevant chunks from vector store
+- [x] Construct grounded RAG prompt
+- [x] Call LLM using Groq API
+- [x] Return answer to frontend
 
 ### Guardrails (MANDATORY)
-- [ ] “Not enough data” fallback response
-- [ ] Strict context-only answers
-- [ ] Graceful error handling for:
+- [x] "Not enough data" fallback response
+- [x] Strict context-only answers
+- [x] Graceful error handling for:
   - LLM failures
   - Empty vector store
   - Retrieval errors
+
+### Implementation
+- Handler: `internal/api/handlers/ask.go`
+- LLM service: `internal/service/llm/service.go` (Gemini embeddings + Groq inference)
+- Vector search: `internal/service/vector/store.go`
 
 ### Outcome
 ✅ AI answers feel **trustworthy**  
@@ -109,15 +124,15 @@ This is the **core differentiator** of Mind Garden.
 Make the frontend and backend work as **one cohesive system**.
 
 ### Required Tasks
-- [ ] Create API client for FastAPI (separate from Supabase)
+- [x] Create API proxy in Next.js (via `/api/ask`)
 - [ ] On journal creation → call backend ingestion endpoint
-- [ ] Wire Ask AI page to backend `/ask` endpoint
-- [ ] Implement loading and error states in UI
+- [x] Wire Ask AI page to backend `/ask` endpoint
+- [x] Implement loading and error states in UI
 
 ### Notes
 - Supabase handles auth & DB
-- FastAPI handles intelligence & RAG
-- Frontend must send Supabase JWT to backend
+- Go backend handles intelligence & RAG
+- Frontend currently proxies through Next.js API routes
 
 ### Outcome
 ✅ Frontend + backend communicate correctly  
@@ -161,11 +176,11 @@ The following **must not** be added in MVP-v1:
 ## ✅ Definition of MVP-v1 Done
 
 MVP-v1 is complete when:
-- Journals are embedded and searchable
-- AI answers are grounded in journal content
-- Errors are handled gracefully
-- User data is private and isolated
-- The system is stable and explainable
+- [x] Journals are embedded and searchable
+- [x] AI answers are grounded in journal content
+- [x] Errors are handled gracefully
+- [ ] User data is private and isolated (per-user vector stores)
+- [x] The system is stable and explainable
 
 ---
 
@@ -177,3 +192,20 @@ Convert each checkbox in this document into:
 - With acceptance criteria
 
 This document is the **single source of truth** for MVP-v1.
+
+---
+
+## 🏗️ Technical Stack Summary
+
+**Backend**: Go 1.25+
+- Router: Chi v5
+- AI Embeddings: Google Gemini (text-embedding-004)
+- LLM Inference: Groq API
+- Vector Store: Custom Go implementation with disk persistence
+
+**Frontend**: Next.js 13+ with TypeScript
+- Auth & DB: Supabase
+- UI: Radix UI + Tailwind CSS
+- Styling: shadcn/ui components
+
+**Architecture**: Clean architecture with internal service layers

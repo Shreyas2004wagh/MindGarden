@@ -1,10 +1,10 @@
-# Pycache
-__pycache__/
-# Venv
-venv/
-
-# Go
+# Go Backend
 Server/bin/
 Server/storage/
 Server/.env
 Server/.env.local
+
+# General
+.DS_Store
+node_modules/
+.next/

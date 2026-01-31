@@ -5,9 +5,12 @@ go 1.25.6
 require (
 	github.com/go-chi/chi/v5 v5.2.4
 	github.com/go-chi/cors v1.2.2
+	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/generative-ai-go v0.20.1
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
+	github.com/lib/pq v1.11.1
+	github.com/sashabaranov/go-openai v1.41.2
 	google.golang.org/api v0.264.0
 )
 
@@ -25,7 +28,8 @@ require (
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.11 // indirect
 	github.com/googleapis/gax-go/v2 v2.16.0 // indirect
-	github.com/sashabaranov/go-openai v1.41.2 // indirect
+	github.com/supabase-community/gotrue-go v1.2.1 // indirect
+	github.com/tomnomnom/linkheader v0.0.0-20180905144013-02ca5825eb80 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.61.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0 // indirect

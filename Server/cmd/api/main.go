@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/cors"
 	"github.com/joho/godotenv"
 	"github.com/mindgarden/server/internal/api"
+	"github.com/mindgarden/server/internal/api/handlers"
 )
 
 func main() {
@@ -24,6 +25,13 @@ func run() error {
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using system environment")
 	}
+
+	// Initialize database connection
+	if err := handlers.InitDB(); err != nil {
+		log.Printf("Warning: Database initialization failed: %v", err)
+		log.Println("Server will continue but database-dependent endpoints will fail")
+	}
+	defer handlers.CloseDB()
 
 	port := os.Getenv("PORT")
 	if port == "" {
