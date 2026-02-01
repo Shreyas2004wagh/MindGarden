@@ -19,15 +19,21 @@ type IngestRequest struct {
 // Global instances for MVP simplicity. In production use dependency injection.
 var (
 	llmService  *llm.Service
-	vectorStore *vector.Store
+	vectorStore vector.VectorStore
 )
 
 func InitServices() {
 	llmService = llm.NewService()
-	// Per-user store in real app. Here single store for MVP demo.
-	os.MkdirAll("storage", 0755)
-	vectorStore = vector.NewStore("storage/index.json")
-	vectorStore.Load()
+	
+	// Initialize Postgres Vector Store
+	pgStore := vector.NewPostgresStore(getDB())
+	if err := pgStore.InitSchema(); err != nil {
+		// Log but don't panic? Or panic since RAG depends on it. 
+		// For MVP, printing is enough, it will fail on requests.
+		// Use standard logger
+		println("Failed to init vector schema:", err.Error())
+	}
+	vectorStore = pgStore
 }
 
 func IngestJournal(w http.ResponseWriter, r *http.Request) {
@@ -57,8 +63,14 @@ func IngestJournal(w http.ResponseWriter, r *http.Request) {
 			"timestamp": time.Now(),
 		},
 	}
-	vectorStore.Add(doc)
-	vectorStore.Save()
+	if err := vectorStore.Add(doc); err != nil {
+		http.Error(w, "Failed to save to vector store: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// vectorStore.Save() // No-op for Postgres, but part of interface if we kept it. 
+    // Actually the interface has Save(), so we can call it or ignore it.
+    // Let's call it for correctness with interface, distinct from Add error.
+    vectorStore.Save()
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ingested", "id": doc.ID})
