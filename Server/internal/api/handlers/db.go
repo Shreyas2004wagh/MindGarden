@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/lib/pq"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 var (
@@ -43,14 +43,18 @@ func InitDB() error {
 				host, port, user, password, dbname)
 		}
 
-		db, err = sql.Open("postgres", dbURL)
+		db, err = sql.Open("pgx", dbURL)
 		if err != nil {
 			err = fmt.Errorf("failed to open database: %w", err)
 			return
 		}
 
+		// Set a timeout for the ping
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
 		// Test connection
-		if err = db.Ping(); err != nil {
+		if err = db.PingContext(ctx); err != nil {
 			err = fmt.Errorf("failed to ping database: %w", err)
 			return
 		}

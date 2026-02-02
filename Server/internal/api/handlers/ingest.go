@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,11 +23,11 @@ var (
 
 func InitServices() {
 	llmService = llm.NewService()
-	
+
 	// Initialize Postgres Vector Store
 	pgStore := vector.NewPostgresStore(getDB())
 	if err := pgStore.InitSchema(); err != nil {
-		// Log but don't panic? Or panic since RAG depends on it. 
+		// Log but don't panic? Or panic since RAG depends on it.
 		// For MVP, printing is enough, it will fail on requests.
 		// Use standard logger
 		println("Failed to init vector schema:", err.Error())
@@ -45,7 +44,7 @@ func IngestJournal(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Chunking (Simple split by newlines for MVP)
 	// Real app: robust token-based chunking
-	
+
 	// 2. Generate Embedding
 	embedding, err := llmService.GetEmbedding(r.Context(), req.Content)
 	if err != nil {
@@ -67,10 +66,10 @@ func IngestJournal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to save to vector store: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// vectorStore.Save() // No-op for Postgres, but part of interface if we kept it. 
-    // Actually the interface has Save(), so we can call it or ignore it.
-    // Let's call it for correctness with interface, distinct from Add error.
-    vectorStore.Save()
+	// vectorStore.Save() // No-op for Postgres, but part of interface if we kept it.
+	// Actually the interface has Save(), so we can call it or ignore it.
+	// Let's call it for correctness with interface, distinct from Add error.
+	vectorStore.Save()
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ingested", "id": doc.ID})
