@@ -16,26 +16,27 @@ type Document struct {
 	Content   string                 `json:"content"`
 }
 
-type Store struct {
+type MemoryStore struct {
 	mu        sync.RWMutex
 	Documents []Document `json:"documents"`
 	Filepath  string
 }
 
-func NewStore(filepath string) *Store {
-	return &Store{
+func NewMemoryStore(filepath string) *MemoryStore {
+	return &MemoryStore{
 		Documents: []Document{},
 		Filepath:  filepath,
 	}
 }
 
-func (s *Store) Add(doc Document) {
+func (s *MemoryStore) Add(doc Document) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Documents = append(s.Documents, doc)
+	return nil
 }
 
-func (s *Store) Save() error {
+func (s *MemoryStore) Save() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -46,7 +47,7 @@ func (s *Store) Save() error {
 	return os.WriteFile(s.Filepath, data, 0644)
 }
 
-func (s *Store) Load() error {
+func (s *MemoryStore) Load() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -74,7 +75,7 @@ func CosineSimilarity(a, b Vector) float32 {
 	return dotProduct / (float32(math.Sqrt(float64(normA))) * float32(math.Sqrt(float64(normB))))
 }
 
-func (s *Store) Search(query Vector, k int) []Document {
+func (s *MemoryStore) Search(query Vector, k int) ([]Document, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -110,5 +111,5 @@ func (s *Store) Search(query Vector, k int) []Document {
 		topK[i] = results[i].doc
 	}
 
-	return topK
+	return topK, nil
 }

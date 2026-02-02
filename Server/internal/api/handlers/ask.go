@@ -27,7 +27,11 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Search
-	docs := vectorStore.Search(qEmbedding, 3)
+	docs, err := vectorStore.Search(qEmbedding, 3)
+	if err != nil {
+		http.Error(w, "Vector search failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if len(docs) == 0 {
 		json.NewEncoder(w).Encode(map[string]string{"answer": " I don't have enough information in your journals to answer that."})
 		return
