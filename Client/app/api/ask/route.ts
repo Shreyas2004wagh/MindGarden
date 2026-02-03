@@ -14,35 +14,44 @@ export async function POST(request: NextRequest) {
 
     const { question } = await request.json();
 
-    if (!question || typeof question !== 'string') {
+    if (!question || typeof question !== 'string' || !question.trim()) {
       return NextResponse.json({ error: 'Question is required' }, { status: 400 });
     }
 
-    const { data: journals } = await supabase
-      .from('journals')
-      .select('content, created_at')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
+    // Get the session token for backend authentication
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
 
-    if (!journals || journals.length === 0) {
-      return NextResponse.json({
-        answer: 'You don\'t have any journal entries yet. Start writing to unlock AI insights.',
-      });
+    if (!session) {
+      return NextResponse.json({ error: 'No session found' }, { status: 401 });
     }
 
-    const answer = `This is a placeholder response. In production, this would:
+    // Forward the request to the Go backend
+    const backendUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+    const response = await fetch(`${backendUrl}/ask`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({
+        question: question.trim(),
+        user_id: user.id,
+      }),
+    });
 
-1. Take your question: "${question}"
-2. Search through your ${journals.length} journal entries using RAG (Retrieval Augmented Generation)
-3. Find relevant passages from your past reflections
-4. Generate a thoughtful, personalized answer based on your own writing
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Backend error:', errorText);
+      return NextResponse.json(
+        { error: 'Failed to get answer from AI' },
+        { status: response.status }
+      );
+    }
 
-To enable this feature, connect this endpoint to the Go backend that implements:
-- Vector embeddings for journal content (Gemini)
-- Semantic search across entries (custom vector store)
-- LLM-powered response generation (Groq)`;
-
-    return NextResponse.json({ answer });
+    const data = await response.json();
+    return NextResponse.json(data);
   } catch (error) {
     console.error('Error in ask API:', error);
     return NextResponse.json(
