@@ -3,6 +3,7 @@ package vector
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // SearchByUser searches for similar documents filtered by user_id with similarity threshold
@@ -52,6 +53,14 @@ func (s *PostgresStore) SearchByUser(query Vector, k int, userID string, minSimi
 		// Parse embedding
 		if err := json.Unmarshal([]byte(embeddingStr), &doc.Embedding); err != nil {
 			return nil, fmt.Errorf("failed to parse embedding from db: %w", err)
+		}
+
+		// Fix timestamp: JSON unmarshaling converts time.Time to string
+		// We need to parse it back to time.Time
+		if timestampStr, ok := doc.Metadata["timestamp"].(string); ok {
+			if parsedTime, err := time.Parse(time.RFC3339, timestampStr); err == nil {
+				doc.Metadata["timestamp"] = parsedTime
+			}
 		}
 
 		// Store similarity score in metadata for reference

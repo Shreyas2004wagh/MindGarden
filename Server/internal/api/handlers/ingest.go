@@ -13,10 +13,11 @@ import (
 )
 
 type IngestRequest struct {
-	JournalID string  `json:"journal_id"` // Required: journal ID
-	Title     *string `json:"title"`      // Optional: journal title
-	Content   string  `json:"content"`    // Required: journal content
-	UserID    string  `json:"user_id"`    // Required: user ID
+	JournalID string    `json:"journal_id"` // Required: journal ID
+	Title     *string   `json:"title"`      // Optional: journal title
+	Content   string    `json:"content"`    // Required: journal content
+	UserID    string    `json:"user_id"`    // Required: user ID
+	CreatedAt time.Time `json:"created_at"` // Optional: journal creation time
 }
 
 // Global instances for MVP simplicity. In production use dependency injection.
@@ -77,6 +78,12 @@ func IngestJournal(w http.ResponseWriter, r *http.Request) {
 			titleStr = *req.Title
 		}
 
+		// Use provided timestamp or default to now
+		timestamp := req.CreatedAt
+		if timestamp.IsZero() {
+			timestamp = time.Now()
+		}
+
 		// Create document with enhanced metadata
 		doc := vector.Document{
 			ID:        uuid.New().String(),
@@ -88,7 +95,7 @@ func IngestJournal(w http.ResponseWriter, r *http.Request) {
 				"chunk_index":  chunk.Index,
 				"total_chunks": chunk.TotalCount,
 				"title":        titleStr,
-				"timestamp":    time.Now(),
+				"timestamp":    timestamp, // Use journal creation time
 			},
 		}
 

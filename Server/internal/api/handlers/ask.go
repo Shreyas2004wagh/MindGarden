@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -49,9 +50,10 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Minimum similarity of 0.50 (50% cosine similarity)
+	// Minimum similarity of 0.35 (35% cosine similarity)
 	// This balances between quality and recall for journal queries
-	docs, err := pgStore.SearchByUser(qEmbedding, 5, req.UserID, 0.50)
+	// Lower threshold allows more relevant chunks while tiered confidence handles quality
+	docs, err := pgStore.SearchByUser(qEmbedding, 5, req.UserID, 0.35)
 	if err != nil {
 		http.Error(w, "Vector search failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -65,11 +67,38 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Require at least 2 chunks for confidence (unless only 1 journal exists)
-	if len(docs) < 2 {
-		// Check similarity score of the single result
+	// Sort results chronologically (most recent first) for better temporal context
+	sort.Slice(docs, func(i, j int) bool {
+		ti, okI := docs[i].Metadata["timestamp"].(time.Time)
+		tj, okJ := docs[j].Metadata["timestamp"].(time.Time)
+		if okI && okJ {
+			return ti.After(tj)
+		}
+		return false
+	})
+
+	// Calculate average similarity for confidence assessment
+	var totalSimilarity float32
+	for _, doc := range docs {
+		if similarity, ok := doc.Metadata["similarity"].(float32); ok {
+			totalSimilarity += similarity
+		}
+	}
+	avgSimilarity := totalSimilarity / float32(len(docs))
+
+	// Tiered confidence approach
+	// Low confidence: reject if average similarity is too low
+	if avgSimilarity < 0.35 {
+		json.NewEncoder(w).Encode(AskResponse{
+			Answer: "I don't have enough information in your journals to answer that question confidently.",
+		})
+		return
+	}
+
+	// For single results, require slightly higher confidence
+	if len(docs) == 1 {
 		similarity, ok := docs[0].Metadata["similarity"].(float32)
-		if !ok || similarity < 0.75 {
+		if !ok || similarity < 0.50 {
 			json.NewEncoder(w).Encode(AskResponse{
 				Answer: "I'm not confident enough to answer based on your journals. The information might not be directly related to your question.",
 			})
@@ -77,13 +106,20 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 4. Construct context with source attribution
+	// 4. Construct context with source attribution and dates
 	var context strings.Builder
 	var sources []map[string]interface{}
 
 	for i, doc := range docs {
-		// Add chunk content to context
-		context.WriteString(fmt.Sprintf("Journal Entry %d:\n%s\n\n---\n\n", i+1, doc.Content))
+		// Extract and format date
+		dateStr := "Unknown date"
+		if timestamp, ok := doc.Metadata["timestamp"].(time.Time); ok {
+			dateStr = timestamp.Format("January 2, 2006")
+		}
+
+		// Add chunk content to context with date
+		context.WriteString(fmt.Sprintf("Journal Entry %d (Written on %s):\n%s\n\n---\n\n",
+			i+1, dateStr, doc.Content))
 
 		// Collect source information
 		source := map[string]interface{}{
@@ -97,24 +133,34 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 		sources = append(sources, source)
 	}
 
-	// 5. Enhanced prompt with strict anti-hallucination rules
+	// 5. Enhanced prompt with strict anti-hallucination rules and temporal awareness
+	confidenceInstruction := ""
+	if avgSimilarity >= 0.65 {
+		// High confidence: answer directly
+		confidenceInstruction = ""
+	} else if avgSimilarity >= 0.35 {
+		// Medium confidence: add caveat
+		confidenceInstruction = "\n9. Start your answer with 'Based on what I found in your journals...' to indicate moderate confidence"
+	}
+
 	prompt := fmt.Sprintf(`You are a helpful assistant for the user's personal journal system called Mind Garden.
 
 STRICT RULES - YOU MUST FOLLOW THESE:
 1. Answer ONLY using the journal entries provided below
-2. If the answer is not in the journals, say "I don't find that in your journals"
-3. Never make assumptions or use external knowledge
-4. Never invent facts or details not present in the journals
-5. If uncertain, say "I'm not sure based on your journals"
-6. Quote or reference specific journal entries when possible
-7. Keep answers concise and grounded in the provided context
+2. Each entry includes the date it was written - use this for temporal questions
+3. When answering "when" questions, reference the specific dates from the entries
+4. If the answer is not in the journals, say "I don't find that in your journals"
+5. Never make assumptions or use external knowledge
+6. Never invent facts or details not present in the journals
+7. If uncertain, say "I'm not sure based on your journals"
+8. Quote or reference specific journal entries when possible%s
 
-Journal Entries:
+Journal Entries (sorted by date, most recent first):
 %s
 
 Question: %s
 
-Answer (remember: ONLY use information from the journal entries above):`, context.String(), req.Question)
+Answer (remember: ONLY use information from the journal entries above):`, confidenceInstruction, context.String(), req.Question)
 
 	// 6. Generate Answer
 	answer, err := llmService.GenerateAnswer(r.Context(), prompt)
