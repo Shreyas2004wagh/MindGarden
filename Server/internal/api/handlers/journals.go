@@ -82,7 +82,7 @@ func CreateJournal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Trigger async ingestion for RAG (don't block response)
-	go func() {
+	go func(journalCreatedAt time.Time) {
 		// Use background context since this runs after HTTP response
 		ctx := context.Background()
 
@@ -121,7 +121,7 @@ func CreateJournal(w http.ResponseWriter, r *http.Request) {
 					"chunk_index":  chunk.Index,
 					"total_chunks": chunk.TotalCount,
 					"title":        titleStr,
-					"timestamp":    time.Now(),
+					"timestamp":    journalCreatedAt, // Use journal creation time, not embedding time
 				},
 			}
 
@@ -133,7 +133,7 @@ func CreateJournal(w http.ResponseWriter, r *http.Request) {
 
 		vectorStore.Save()
 		println("Successfully ingested journal", journalID, "with", len(chunks), "chunks")
-	}()
+	}(createdAt) // Pass createdAt to goroutine
 
 	// Return created journal immediately (don't wait for ingestion)
 	w.Header().Set("Content-Type", "application/json")
