@@ -81,9 +81,9 @@ func (w *Worker) processNextJob() {
 		log.Printf("Job %s failed: %v", job.ID, err)
 		errMsg := err.Error()
 		w.repo.IncrementAttempts(ctx, job.ID)
-		
+
 		// Check max attempts
-		// Need to refresh job to get current attempts if they were incremented concurrently, 
+		// Need to refresh job to get current attempts if they were incremented concurrently,
 		// but since we are the only worker processing this ID, we can assume local copy + 1 is accurate enough or just use the IncrementAttempts behavior.
 		// However, IncrementAttempts happens in DB.
 		// Let's assume we want to retry if attempts < MaxAttempts.
@@ -104,10 +104,31 @@ func (w *Worker) processNextJob() {
 	}
 }
 
+// llmServiceAdapter wraps llm.Service to match chunker.LLMService interface
+type llmServiceAdapter struct {
+	service *llm.Service
+}
+
+func (a *llmServiceAdapter) AnalyzeChunkMetadata(ctx context.Context, text string) (*chunker.MetadataAnalysis, error) {
+	analysis, err := a.service.AnalyzeChunkMetadata(ctx, text)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert llm.MetadataAnalysis to chunker.MetadataAnalysis
+	return &chunker.MetadataAnalysis{
+		Sentiment: analysis.Sentiment,
+		Topics:    analysis.Topics,
+	}, nil
+}
+
 func (w *Worker) ingest(ctx context.Context, job *Job) error {
-	// 1. Chunk content
-	config := chunker.DefaultConfig()
-	chunks := chunker.ChunkText(job.Content, config)
+	// 1. Chunk content with adaptive configuration
+	config := chunker.GetOptimalConfig(len(job.Content))
+
+	// Wrap llmService to match interface
+	adapter := &llmServiceAdapter{service: w.llmService}
+	chunks := chunker.ChunkTextEnriched(job.Content, config, adapter)
 
 	// 2. Generate embeddings and store
 	for _, chunk := range chunks {
@@ -133,6 +154,14 @@ func (w *Worker) ingest(ctx context.Context, job *Job) error {
 				"title":        titleStr,
 				"timestamp":    job.CreatedAt,
 				"job_id":       job.ID.String(),
+				// Enriched metadata
+				"word_count":        chunk.WordCount,
+				"sentence_count":    chunk.SentenceCount,
+				"has_questions":     chunk.HasQuestions,
+				"has_dates":         chunk.HasDates,
+				"sentiment":         chunk.Sentiment,
+				"topics":            chunk.Topics,
+				"enrichment_method": chunk.EnrichmentMethod,
 			},
 		}
 
@@ -140,9 +169,11 @@ func (w *Worker) ingest(ctx context.Context, job *Job) error {
 			return fmt.Errorf("failed to save to vector store: %w", err)
 		}
 	}
-	
+
 	// Ensure implementation saves (commit/flush if needed)
-	w.vectorStore.Save()
+	if err := w.vectorStore.Save(); err != nil {
+		return fmt.Errorf("failed to save vector store: %w", err)
+	}
 
 	return nil
 }
