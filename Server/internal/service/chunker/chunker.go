@@ -19,12 +19,57 @@ type Chunk struct {
 	TotalCount int
 }
 
+// EnrichedChunk extends Chunk with semantic metadata
+type EnrichedChunk struct {
+	Chunk
+	WordCount     int      // Number of words in the chunk
+	SentenceCount int      // Number of sentences in the chunk
+	HasQuestions  bool     // Whether the chunk contains questions
+	HasDates      bool     // Whether the chunk contains date references
+	Sentiment     string   // Sentiment: positive, negative, neutral
+	Topics        []string // Extracted topics/keywords
+}
+
 // DefaultConfig returns sensible defaults for journal chunking
 func DefaultConfig() ChunkConfig {
 	return ChunkConfig{
 		MaxChunkSize: 600, // ~90-120 words (2-3 paragraphs)
 		MinChunkSize: 300, // ~45-60 words (1 paragraph)
 		Overlap:      80,  // ~12-15 words overlap for context
+	}
+}
+
+// GetOptimalConfig returns adaptive chunking configuration based on text length
+func GetOptimalConfig(textLength int) ChunkConfig {
+	switch {
+	case textLength < 500:
+		// Short journal - don't chunk
+		return ChunkConfig{
+			MaxChunkSize: 1000,
+			MinChunkSize: 500,
+			Overlap:      0,
+		}
+	case textLength < 1500:
+		// Medium journal - small chunks
+		return ChunkConfig{
+			MaxChunkSize: 600,
+			MinChunkSize: 300,
+			Overlap:      80,
+		}
+	case textLength < 3000:
+		// Long journal - medium chunks
+		return ChunkConfig{
+			MaxChunkSize: 800,
+			MinChunkSize: 400,
+			Overlap:      100,
+		}
+	default:
+		// Very long journal - larger chunks
+		return ChunkConfig{
+			MaxChunkSize: 1000,
+			MinChunkSize: 500,
+			Overlap:      150,
+		}
 	}
 }
 
@@ -244,4 +289,179 @@ func getOverlap(text string, overlapSize int) string {
 
 	// Fallback: return as-is
 	return overlap
+}
+
+// ChunkTextEnriched splits text into enriched chunks with metadata
+func ChunkTextEnriched(text string, config ChunkConfig) []EnrichedChunk {
+	baseChunks := ChunkText(text, config)
+	enrichedChunks := make([]EnrichedChunk, len(baseChunks))
+
+	for i, chunk := range baseChunks {
+		enrichedChunks[i] = EnrichedChunk{
+			Chunk:         chunk,
+			WordCount:     countWords(chunk.Content),
+			SentenceCount: countSentences(chunk.Content),
+			HasQuestions:  hasQuestions(chunk.Content),
+			HasDates:      hasDates(chunk.Content),
+			Sentiment:     analyzeSentiment(chunk.Content),
+			Topics:        extractTopics(chunk.Content),
+		}
+	}
+
+	return enrichedChunks
+}
+
+// countWords counts the number of words in text
+func countWords(text string) int {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0
+	}
+	words := strings.Fields(text)
+	return len(words)
+}
+
+// countSentences counts the number of sentences in text
+func countSentences(text string) int {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0
+	}
+	sentences := splitIntoSentences(text)
+	return len(sentences)
+}
+
+// hasQuestions checks if text contains question marks
+func hasQuestions(text string) bool {
+	return strings.Contains(text, "?")
+}
+
+// hasDates checks if text contains date patterns
+func hasDates(text string) bool {
+	// Common date patterns: "January", "2024", "01/01", "1st", "today", "yesterday", etc.
+	dateKeywords := []string{
+		"january", "february", "march", "april", "may", "june",
+		"july", "august", "september", "october", "november", "december",
+		"jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+		"today", "yesterday", "tomorrow", "monday", "tuesday", "wednesday",
+		"thursday", "friday", "saturday", "sunday",
+	}
+
+	lowerText := strings.ToLower(text)
+	for _, keyword := range dateKeywords {
+		if strings.Contains(lowerText, keyword) {
+			return true
+		}
+	}
+
+	// Check for numeric date patterns (e.g., "2024", "01/01", "1st", "2nd")
+	for _, r := range text {
+		if unicode.IsDigit(r) {
+			// If we find digits, check for common date patterns
+			if strings.Contains(text, "/") || strings.Contains(text, "-") ||
+				strings.Contains(text, "st") || strings.Contains(text, "nd") ||
+				strings.Contains(text, "rd") || strings.Contains(text, "th") {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// analyzeSentiment performs simple keyword-based sentiment analysis
+func analyzeSentiment(text string) string {
+	lowerText := strings.ToLower(text)
+
+	positiveWords := []string{
+		"happy", "joy", "love", "excited", "great", "wonderful", "amazing",
+		"fantastic", "excellent", "good", "better", "best", "grateful",
+		"thankful", "blessed", "proud", "accomplished", "success", "win",
+	}
+
+	negativeWords := []string{
+		"sad", "angry", "hate", "terrible", "awful", "bad", "worse", "worst",
+		"depressed", "anxious", "worried", "stressed", "frustrated", "upset",
+		"disappointed", "fail", "failure", "lost", "hurt", "pain",
+	}
+
+	positiveCount := 0
+	negativeCount := 0
+
+	for _, word := range positiveWords {
+		positiveCount += strings.Count(lowerText, word)
+	}
+
+	for _, word := range negativeWords {
+		negativeCount += strings.Count(lowerText, word)
+	}
+
+	// Determine sentiment based on counts
+	if positiveCount > negativeCount {
+		return "positive"
+	} else if negativeCount > positiveCount {
+		return "negative"
+	}
+	return "neutral"
+}
+
+// extractTopics extracts key topics using simple word frequency analysis
+func extractTopics(text string) []string {
+	// Common stop words to ignore
+	stopWords := map[string]bool{
+		"the": true, "a": true, "an": true, "and": true, "or": true, "but": true,
+		"in": true, "on": true, "at": true, "to": true, "for": true, "of": true,
+		"with": true, "by": true, "from": true, "as": true, "is": true, "was": true,
+		"are": true, "were": true, "been": true, "be": true, "have": true, "has": true,
+		"had": true, "do": true, "does": true, "did": true, "will": true, "would": true,
+		"could": true, "should": true, "may": true, "might": true, "must": true,
+		"i": true, "you": true, "he": true, "she": true, "it": true, "we": true,
+		"they": true, "my": true, "your": true, "his": true, "her": true, "its": true,
+		"our": true, "their": true, "this": true, "that": true, "these": true, "those": true,
+	}
+
+	// Clean and split text into words
+	lowerText := strings.ToLower(text)
+	// Remove punctuation
+	cleanText := strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsSpace(r) {
+			return r
+		}
+		return ' '
+	}, lowerText)
+
+	words := strings.Fields(cleanText)
+	wordFreq := make(map[string]int)
+
+	// Count word frequencies
+	for _, word := range words {
+		if len(word) > 3 && !stopWords[word] { // Only consider words longer than 3 chars
+			wordFreq[word]++
+		}
+	}
+
+	// Extract top topics (words with frequency > 1)
+	var topics []string
+	for word, freq := range wordFreq {
+		if freq > 1 {
+			topics = append(topics, word)
+		}
+	}
+
+	// Limit to top 5 topics
+	if len(topics) > 5 {
+		topics = topics[:5]
+	}
+
+	return topics
+}
+
+// endsWithSentence checks if text ends with a sentence boundary
+func endsWithSentence(text string) bool {
+	text = strings.TrimSpace(text)
+	if len(text) == 0 {
+		return false
+	}
+	lastChar := rune(text[len(text)-1])
+	return lastChar == '.' || lastChar == '!' || lastChar == '?'
 }

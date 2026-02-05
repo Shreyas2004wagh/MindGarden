@@ -81,9 +81,9 @@ func (w *Worker) processNextJob() {
 		log.Printf("Job %s failed: %v", job.ID, err)
 		errMsg := err.Error()
 		w.repo.IncrementAttempts(ctx, job.ID)
-		
+
 		// Check max attempts
-		// Need to refresh job to get current attempts if they were incremented concurrently, 
+		// Need to refresh job to get current attempts if they were incremented concurrently,
 		// but since we are the only worker processing this ID, we can assume local copy + 1 is accurate enough or just use the IncrementAttempts behavior.
 		// However, IncrementAttempts happens in DB.
 		// Let's assume we want to retry if attempts < MaxAttempts.
@@ -105,9 +105,9 @@ func (w *Worker) processNextJob() {
 }
 
 func (w *Worker) ingest(ctx context.Context, job *Job) error {
-	// 1. Chunk content
-	config := chunker.DefaultConfig()
-	chunks := chunker.ChunkText(job.Content, config)
+	// 1. Chunk content with adaptive configuration
+	config := chunker.GetOptimalConfig(len(job.Content))
+	chunks := chunker.ChunkTextEnriched(job.Content, config)
 
 	// 2. Generate embeddings and store
 	for _, chunk := range chunks {
@@ -133,6 +133,13 @@ func (w *Worker) ingest(ctx context.Context, job *Job) error {
 				"title":        titleStr,
 				"timestamp":    job.CreatedAt,
 				"job_id":       job.ID.String(),
+				// Enriched metadata
+				"word_count":     chunk.WordCount,
+				"sentence_count": chunk.SentenceCount,
+				"has_questions":  chunk.HasQuestions,
+				"has_dates":      chunk.HasDates,
+				"sentiment":      chunk.Sentiment,
+				"topics":         chunk.Topics,
 			},
 		}
 
@@ -140,7 +147,7 @@ func (w *Worker) ingest(ctx context.Context, job *Job) error {
 			return fmt.Errorf("failed to save to vector store: %w", err)
 		}
 	}
-	
+
 	// Ensure implementation saves (commit/flush if needed)
 	w.vectorStore.Save()
 
