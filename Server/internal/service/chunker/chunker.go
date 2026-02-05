@@ -2,6 +2,7 @@ package chunker
 
 import (
 	"context"
+	"log"
 	"regexp"
 	"strings"
 	"unicode"
@@ -346,9 +347,10 @@ func ChunkTextEnriched(text string, config ChunkConfig, llmService LLMService) [
 				enrichedChunk.EnrichmentMethod = "gemini"
 			} else {
 				// Fallback to simple analysis
-				// Log the error for debugging
 				if err != nil {
-					// Error occurred, using fallback
+					log.Printf("Gemini analysis failed (using fallback): %v", err)
+				} else if analysis == nil {
+					log.Println("Gemini analysis returned nil result (using fallback)")
 				}
 				enrichedChunk.Sentiment = analyzeSentiment(chunk.Content)
 				enrichedChunk.Topics = extractTopics(chunk.Content)
