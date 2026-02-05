@@ -1,13 +1,15 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mindgarden/server/internal/service/chunker"
+	"github.com/mindgarden/server/internal/service/ingestion"
 	"github.com/mindgarden/server/internal/service/llm"
 	"github.com/mindgarden/server/internal/service/vector"
 )
@@ -22,22 +24,38 @@ type IngestRequest struct {
 
 // Global instances for MVP simplicity. In production use dependency injection.
 var (
-	llmService  *llm.Service
-	vectorStore vector.VectorStore
+	llmService      *llm.Service
+	vectorStore     vector.VectorStore
+	ingestionRepo   ingestion.Repository
+	ingestionWorker *ingestion.Worker
 )
 
 func InitServices() {
+	log.Println("InitServices: Starting...")
+	
 	llmService = llm.NewService()
+	log.Println("InitServices: LLM Service initialized")
 
 	// Initialize Postgres Vector Store
 	pgStore := vector.NewPostgresStore(getDB())
 	if err := pgStore.InitSchema(); err != nil {
-		// Log but don't panic? Or panic since RAG depends on it.
-		// For MVP, printing is enough, it will fail on requests.
-		// Use standard logger
-		println("Failed to init vector schema:", err.Error())
+		log.Println("InitServices: Failed to init vector schema:", err.Error())
+	} else {
+		log.Println("InitServices: Vector schema initialized")
 	}
 	vectorStore = pgStore
+
+	// Initialize Ingestion System
+	ingestionRepo = ingestion.NewPostgresRepository(getDB())
+	if err := ingestionRepo.InitSchema(context.Background()); err != nil {
+		log.Println("InitServices: Failed to init ingestion schema:", err.Error())
+	} else {
+		log.Println("InitServices: Ingestion schema initialized")
+	}
+
+	ingestionWorker = ingestion.NewWorker(ingestionRepo, llmService, vectorStore)
+	ingestionWorker.Start()
+	log.Println("InitServices: Worker started. Initialization complete.")
 }
 
 func IngestJournal(w http.ResponseWriter, r *http.Request) {
@@ -53,69 +71,47 @@ func IngestJournal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check for idempotency: if journal already ingested, skip
-	// This prevents duplicate embeddings if the endpoint is called multiple times
-	// We can check by querying for existing embeddings with this journal_id
-	// For MVP, we'll skip this check and rely on application logic
-
-	// 1. Chunk the content using semantic chunking
-	config := chunker.DefaultConfig()
-	chunks := chunker.ChunkText(req.Content, config)
-
-	// 2. Generate embeddings and store each chunk
-	var ingestedIDs []string
-	for _, chunk := range chunks {
-		// Generate embedding for this chunk
-		embedding, err := llmService.GetEmbedding(r.Context(), chunk.Content)
-		if err != nil {
-			http.Error(w, "Failed to generate embedding: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		// Prepare metadata
-		titleStr := ""
-		if req.Title != nil {
-			titleStr = *req.Title
-		}
-
-		// Use provided timestamp or default to now
-		timestamp := req.CreatedAt
-		if timestamp.IsZero() {
-			timestamp = time.Now()
-		}
-
-		// Create document with enhanced metadata
-		doc := vector.Document{
-			ID:        uuid.New().String(),
-			Embedding: embedding,
-			Content:   chunk.Content,
-			Metadata: map[string]interface{}{
-				"user_id":      req.UserID,
-				"journal_id":   req.JournalID,
-				"chunk_index":  chunk.Index,
-				"total_chunks": chunk.TotalCount,
-				"title":        titleStr,
-				"timestamp":    timestamp, // Use journal creation time
-			},
-		}
-
-		// Save to vector store
-		if err := vectorStore.Add(doc); err != nil {
-			http.Error(w, "Failed to save to vector store: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		ingestedIDs = append(ingestedIDs, doc.ID)
+	// Parse UUIDs
+	journalUID, err := uuid.Parse(req.JournalID)
+	if err != nil {
+		http.Error(w, "Invalid journal_id format", http.StatusBadRequest)
+		return
+	}
+	userUID, err := uuid.Parse(req.UserID)
+	if err != nil {
+		http.Error(w, "Invalid user_id format", http.StatusBadRequest)
+		return
 	}
 
-	// Call Save() for interface compliance (no-op for Postgres)
-	vectorStore.Save()
+	// Prepare Job
+	jobID := uuid.New()
+	// Use provided timestamp or default to now
+	timestamp := req.CreatedAt
+	if timestamp.IsZero() {
+		timestamp = time.Now()
+	}
 
-	w.WriteHeader(http.StatusCreated)
+	job := &ingestion.Job{
+		ID:        jobID,
+		JournalID: journalUID,
+		UserID:    userUID,
+		Title:     req.Title,
+		Content:   req.Content,
+		Status:    ingestion.StatusPending,
+		CreatedAt: timestamp,
+		UpdatedAt: time.Now(),
+	}
+
+	// Create Job in DB
+	if err := ingestionRepo.CreateJob(r.Context(), job); err != nil {
+		http.Error(w, "Failed to queue ingestion job: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":         "ingested",
-		"journal_id":     req.JournalID,
-		"chunks_created": len(chunks),
-		"embedding_ids":  ingestedIDs,
+		"status":  "pending",
+		"job_id":  jobID.String(),
+		"message": "Ingestion job queued",
 	})
 }

@@ -53,7 +53,9 @@ func run() error {
 	}))
 
 	// Mount API routes
+	log.Println("Mounting API routes...")
 	api.MountRoutes(r)
+	log.Println("API routes mounted via handlers.InitServices")
 
 	log.Printf("Server starting on port %s", port)
 	return http.ListenAndServe(":"+port, r)
