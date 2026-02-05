@@ -1,6 +1,8 @@
 package chunker
 
 import (
+	"context"
+	"regexp"
 	"strings"
 	"unicode"
 )
@@ -12,6 +14,31 @@ type ChunkConfig struct {
 	Overlap      int // Character overlap between chunks
 }
 
+// Default chunking constants
+const (
+	// Text length thresholds
+	JournalLengthShort  = 500
+	JournalLengthMedium = 1500
+	JournalLengthLong   = 3000
+
+	// Chunk size configurations
+	ChunkSizeShortMax = 1000
+	ChunkSizeShortMin = 500
+	ChunkOverlapShort = 0
+
+	ChunkSizeMediumMax = 600
+	ChunkSizeMediumMin = 300
+	ChunkOverlapMedium = 80
+
+	ChunkSizeLongMax = 800
+	ChunkSizeLongMin = 400
+	ChunkOverlapLong = 100
+
+	ChunkSizeVeryLongMax = 1000
+	ChunkSizeVeryLongMin = 500
+	ChunkOverlapVeryLong = 150
+)
+
 // Chunk represents a text chunk with metadata
 type Chunk struct {
 	Content    string
@@ -22,53 +49,54 @@ type Chunk struct {
 // EnrichedChunk extends Chunk with semantic metadata
 type EnrichedChunk struct {
 	Chunk
-	WordCount     int      // Number of words in the chunk
-	SentenceCount int      // Number of sentences in the chunk
-	HasQuestions  bool     // Whether the chunk contains questions
-	HasDates      bool     // Whether the chunk contains date references
-	Sentiment     string   // Sentiment: positive, negative, neutral
-	Topics        []string // Extracted topics/keywords
+	WordCount        int      // Number of words in the chunk
+	SentenceCount    int      // Number of sentences in the chunk
+	HasQuestions     bool     // Whether the chunk contains questions
+	HasDates         bool     // Whether the chunk contains date references
+	Sentiment        string   // Sentiment: positive, negative, neutral
+	Topics           []string // Extracted topics/keywords
+	EnrichmentMethod string   // Method used: "gemini" or "simple"
 }
 
 // DefaultConfig returns sensible defaults for journal chunking
 func DefaultConfig() ChunkConfig {
 	return ChunkConfig{
-		MaxChunkSize: 600, // ~90-120 words (2-3 paragraphs)
-		MinChunkSize: 300, // ~45-60 words (1 paragraph)
-		Overlap:      80,  // ~12-15 words overlap for context
+		MaxChunkSize: ChunkSizeMediumMax,
+		MinChunkSize: ChunkSizeMediumMin,
+		Overlap:      ChunkOverlapMedium,
 	}
 }
 
 // GetOptimalConfig returns adaptive chunking configuration based on text length
 func GetOptimalConfig(textLength int) ChunkConfig {
 	switch {
-	case textLength < 500:
+	case textLength < JournalLengthShort:
 		// Short journal - don't chunk
 		return ChunkConfig{
-			MaxChunkSize: 1000,
-			MinChunkSize: 500,
-			Overlap:      0,
+			MaxChunkSize: ChunkSizeShortMax,
+			MinChunkSize: ChunkSizeShortMin,
+			Overlap:      ChunkOverlapShort,
 		}
-	case textLength < 1500:
+	case textLength < JournalLengthMedium:
 		// Medium journal - small chunks
 		return ChunkConfig{
-			MaxChunkSize: 600,
-			MinChunkSize: 300,
-			Overlap:      80,
+			MaxChunkSize: ChunkSizeMediumMax,
+			MinChunkSize: ChunkSizeMediumMin,
+			Overlap:      ChunkOverlapMedium,
 		}
-	case textLength < 3000:
+	case textLength < JournalLengthLong:
 		// Long journal - medium chunks
 		return ChunkConfig{
-			MaxChunkSize: 800,
-			MinChunkSize: 400,
-			Overlap:      100,
+			MaxChunkSize: ChunkSizeLongMax,
+			MinChunkSize: ChunkSizeLongMin,
+			Overlap:      ChunkOverlapLong,
 		}
 	default:
 		// Very long journal - larger chunks
 		return ChunkConfig{
-			MaxChunkSize: 1000,
-			MinChunkSize: 500,
-			Overlap:      150,
+			MaxChunkSize: ChunkSizeVeryLongMax,
+			MinChunkSize: ChunkSizeVeryLongMin,
+			Overlap:      ChunkOverlapVeryLong,
 		}
 	}
 }
@@ -113,7 +141,7 @@ func ChunkText(text string, config ChunkConfig) []Chunk {
 			}
 
 			// Split long paragraph into sentences and chunk them
-			sentences := splitIntoSentences(para)
+			sentences := SplitIntoSentences(para)
 			for _, sentence := range sentences {
 				sentenceLen := len(sentence)
 				currentLen = currentChunk.Len()
@@ -222,8 +250,8 @@ func splitIntoParagraphs(text string) []string {
 	return result
 }
 
-// splitIntoSentences splits text into sentences based on punctuation
-func splitIntoSentences(text string) []string {
+// SplitIntoSentences splits text into sentences based on punctuation
+func SplitIntoSentences(text string) []string {
 	var sentences []string
 	var current strings.Builder
 
@@ -292,23 +320,62 @@ func getOverlap(text string, overlapSize int) string {
 }
 
 // ChunkTextEnriched splits text into enriched chunks with metadata
-func ChunkTextEnriched(text string, config ChunkConfig) []EnrichedChunk {
+// If llmService is provided, uses Gemini API for sentiment/topic analysis
+// Otherwise falls back to simple keyword-based analysis
+func ChunkTextEnriched(text string, config ChunkConfig, llmService LLMService) []EnrichedChunk {
 	baseChunks := ChunkText(text, config)
 	enrichedChunks := make([]EnrichedChunk, len(baseChunks))
 
 	for i, chunk := range baseChunks {
-		enrichedChunks[i] = EnrichedChunk{
+		enrichedChunk := EnrichedChunk{
 			Chunk:         chunk,
 			WordCount:     countWords(chunk.Content),
 			SentenceCount: countSentences(chunk.Content),
 			HasQuestions:  hasQuestions(chunk.Content),
 			HasDates:      hasDates(chunk.Content),
-			Sentiment:     analyzeSentiment(chunk.Content),
-			Topics:        extractTopics(chunk.Content),
 		}
+
+		// Try Gemini API if service is provided
+		if llmService != nil {
+			ctx := context.Background()
+			analysis, err := llmService.AnalyzeChunkMetadata(ctx, chunk.Content)
+			if err == nil && analysis != nil {
+				// Successfully got Gemini analysis
+				enrichedChunk.Sentiment = analysis.Sentiment
+				enrichedChunk.Topics = analysis.Topics
+				enrichedChunk.EnrichmentMethod = "gemini"
+			} else {
+				// Fallback to simple analysis
+				// Log the error for debugging
+				if err != nil {
+					// Error occurred, using fallback
+				}
+				enrichedChunk.Sentiment = analyzeSentiment(chunk.Content)
+				enrichedChunk.Topics = extractTopics(chunk.Content)
+				enrichedChunk.EnrichmentMethod = "simple"
+			}
+		} else {
+			// No LLM service, use simple analysis
+			enrichedChunk.Sentiment = analyzeSentiment(chunk.Content)
+			enrichedChunk.Topics = extractTopics(chunk.Content)
+			enrichedChunk.EnrichmentMethod = "simple"
+		}
+
+		enrichedChunks[i] = enrichedChunk
 	}
 
 	return enrichedChunks
+}
+
+// MetadataAnalysis holds sentiment and topic analysis results
+type MetadataAnalysis struct {
+	Sentiment string
+	Topics    []string
+}
+
+// LLMService interface for metadata analysis
+type LLMService interface {
+	AnalyzeChunkMetadata(ctx context.Context, text string) (*MetadataAnalysis, error)
 }
 
 // countWords counts the number of words in text
@@ -327,7 +394,7 @@ func countSentences(text string) int {
 	if text == "" {
 		return 0
 	}
-	sentences := splitIntoSentences(text)
+	sentences := SplitIntoSentences(text)
 	return len(sentences)
 }
 
@@ -336,34 +403,30 @@ func hasQuestions(text string) bool {
 	return strings.Contains(text, "?")
 }
 
-// hasDates checks if text contains date patterns
+// hasDates checks if text contains date patterns using regex
 func hasDates(text string) bool {
-	// Common date patterns: "January", "2024", "01/01", "1st", "today", "yesterday", etc.
-	dateKeywords := []string{
-		"january", "february", "march", "april", "may", "june",
-		"july", "august", "september", "october", "november", "december",
-		"jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
-		"today", "yesterday", "tomorrow", "monday", "tuesday", "wednesday",
-		"thursday", "friday", "saturday", "sunday",
-	}
+	// 1. Common Month Names (Jan, January, etc.) + Day
+	// Matches: "January 1", "Jan 1st", "10th of May", "May 10"
+	monthRegex := regexp.MustCompile(`(?i)\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?\b|\b\d{1,2}(?:st|nd|rd|th)?\s+of\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b`)
 
-	lowerText := strings.ToLower(text)
-	for _, keyword := range dateKeywords {
-		if strings.Contains(lowerText, keyword) {
-			return true
-		}
-	}
+	// 2. Numeric Dates
+	// Matches: "2024-01-01", "01/01/2024", "1-1-24", "1.1.2024"
+	// Be careful with simple 1/2 fractions implies checking minimal length or context,
+	// but strictly for dates usually YYYY is 4 digits or DD/MM/YY
+	numericRegex := regexp.MustCompile(`\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b|\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b`)
 
-	// Check for numeric date patterns (e.g., "2024", "01/01", "1st", "2nd")
-	for _, r := range text {
-		if unicode.IsDigit(r) {
-			// If we find digits, check for common date patterns
-			if strings.Contains(text, "/") || strings.Contains(text, "-") ||
-				strings.Contains(text, "st") || strings.Contains(text, "nd") ||
-				strings.Contains(text, "rd") || strings.Contains(text, "th") {
-				return true
-			}
-		}
+	// 3. Relative Days
+	// Matches: "today", "tomorrow", "yesterday", "Monday", etc.
+	relativeRegex := regexp.MustCompile(`(?i)\b(today|tomorrow|yesterday|mon(?:day)?|tue(?:sday)?|wed(?:nesday)?|thu(?:rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)\b`)
+
+	if monthRegex.MatchString(text) {
+		return true
+	}
+	if numericRegex.MatchString(text) {
+		return true
+	}
+	if relativeRegex.MatchString(text) {
+		return true
 	}
 
 	return false
@@ -373,27 +436,44 @@ func hasDates(text string) bool {
 func analyzeSentiment(text string) string {
 	lowerText := strings.ToLower(text)
 
-	positiveWords := []string{
-		"happy", "joy", "love", "excited", "great", "wonderful", "amazing",
-		"fantastic", "excellent", "good", "better", "best", "grateful",
-		"thankful", "blessed", "proud", "accomplished", "success", "win",
+	// Pre-tokenization for efficiency
+	words := strings.Fields(lowerText)
+	wordMap := make(map[string]int)
+	for _, w := range words {
+		// Strip punctuation
+		cleanWord := strings.TrimFunc(w, func(r rune) bool {
+			return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+		})
+		if cleanWord != "" {
+			wordMap[cleanWord]++
+		}
 	}
 
-	negativeWords := []string{
-		"sad", "angry", "hate", "terrible", "awful", "bad", "worse", "worst",
-		"depressed", "anxious", "worried", "stressed", "frustrated", "upset",
-		"disappointed", "fail", "failure", "lost", "hurt", "pain",
+	positiveWords := map[string]bool{
+		"happy": true, "joy": true, "love": true, "excited": true, "great": true,
+		"wonderful": true, "amazing": true, "fantastic": true, "excellent": true,
+		"good": true, "better": true, "best": true, "grateful": true, "thankful": true,
+		"blessed": true, "proud": true, "accomplished": true, "success": true, "win": true,
+	}
+
+	negativeWords := map[string]bool{
+		"sad": true, "angry": true, "hate": true, "terrible": true, "awful": true,
+		"bad": true, "worse": true, "worst": true, "depressed": true, "anxious": true,
+		"worried": true, "stressed": true, "frustrated": true, "upset": true,
+		"disappointed": true, "fail": true, "failure": true, "lost": true, "hurt": true, "pain": true,
 	}
 
 	positiveCount := 0
 	negativeCount := 0
 
-	for _, word := range positiveWords {
-		positiveCount += strings.Count(lowerText, word)
-	}
-
-	for _, word := range negativeWords {
-		negativeCount += strings.Count(lowerText, word)
+	// Single pass through dictionary
+	for word, count := range wordMap {
+		if positiveWords[word] {
+			positiveCount += count
+		}
+		if negativeWords[word] {
+			negativeCount += count
+		}
 	}
 
 	// Determine sentiment based on counts
@@ -441,7 +521,7 @@ func extractTopics(text string) []string {
 	}
 
 	// Extract top topics (words with frequency > 1)
-	var topics []string
+	topics := []string{} // Initialize as empty slice, not nil
 	for word, freq := range wordFreq {
 		if freq > 1 {
 			topics = append(topics, word)
