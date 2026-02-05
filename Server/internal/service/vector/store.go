@@ -113,3 +113,10 @@ func (s *MemoryStore) Search(query Vector, k int) ([]Document, error) {
 
 	return topK, nil
 }
+
+func (s *MemoryStore) HybridSearch(query string, embedding Vector, k int, userID string) ([]Document, error) {
+	// For MemoryStore, we can just fallback to standard vector search for now
+	// or implement a simple keyword match + vector match.
+	// Since this is likely for testing, returning the vector search result is a safe MVP fallback.
+	return s.Search(embedding, k)
+}

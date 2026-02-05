@@ -42,7 +42,7 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Search with user isolation and similarity threshold
-	// Use SearchByUser from user_search.go for privacy and quality
+	// Use HybridSearch for better recall (keywords + semantic)
 	pgStore, ok := vectorStore.(*vector.PostgresStore)
 	if !ok {
 		// Fallback to regular search if not PostgresStore
@@ -50,10 +50,9 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Minimum similarity of 0.35 (35% cosine similarity)
-	// This balances between quality and recall for journal queries
-	// Lower threshold allows more relevant chunks while tiered confidence handles quality
-	docs, err := pgStore.SearchByUser(qEmbedding, 5, req.UserID, 0.35)
+	// Hybrid Search with 5 results
+	// We don't filter by min similarity in DB anymore, we filter by confidence later
+	docs, err := pgStore.HybridSearch(req.Question, qEmbedding, 5, req.UserID)
 	if err != nil {
 		http.Error(w, "Vector search failed: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -77,18 +76,22 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 		return false
 	})
 
-	// Calculate average similarity for confidence assessment
-	var totalSimilarity float32
+	// Calculate average score for confidence assessment
+	var totalScore float64 // Using float64 as score is float64 in HybridSearch
 	for _, doc := range docs {
-		if similarity, ok := doc.Metadata["similarity"].(float32); ok {
-			totalSimilarity += similarity
+		if score, ok := doc.Metadata["score"].(float64); ok {
+			totalScore += score
+		} else if similarity, ok := doc.Metadata["similarity"].(float32); ok {
+			// Fallback for non-hybrid results if any
+			totalScore += float64(similarity)
 		}
 	}
-	avgSimilarity := totalSimilarity / float32(len(docs))
+	avgScore := float32(totalScore) / float32(len(docs))
 
 	// Tiered confidence approach
-	// Low confidence: reject if average similarity is too low
-	if avgSimilarity < 0.35 {
+	// low confidence: reject if average score is too low
+	// Hybrid score can be lower due to keyword component, but 0.30 seems safe baseline
+	if avgScore < 0.30 {
 		json.NewEncoder(w).Encode(AskResponse{
 			Answer: "I don't have enough information in your journals to answer that question confidently.",
 		})
@@ -97,8 +100,14 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 
 	// For single results, require slightly higher confidence
 	if len(docs) == 1 {
-		similarity, ok := docs[0].Metadata["similarity"].(float32)
-		if !ok || similarity < 0.50 {
+		score, ok := docs[0].Metadata["score"].(float64)
+		if !ok {
+			// fallback
+			if sim, ok := docs[0].Metadata["similarity"].(float32); ok {
+				score = float64(sim)
+			}
+		}
+		if score < 0.45 {
 			json.NewEncoder(w).Encode(AskResponse{
 				Answer: "I'm not confident enough to answer based on your journals. The information might not be directly related to your question.",
 			})
@@ -125,7 +134,7 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 		source := map[string]interface{}{
 			"journal_id": doc.Metadata["journal_id"],
 			"title":      doc.Metadata["title"],
-			"similarity": doc.Metadata["similarity"],
+			"score":      doc.Metadata["score"],
 		}
 		if timestamp, ok := doc.Metadata["timestamp"].(time.Time); ok {
 			source["date"] = timestamp.Format("2006-01-02")
@@ -135,10 +144,10 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Enhanced prompt with strict anti-hallucination rules and temporal awareness
 	confidenceInstruction := ""
-	if avgSimilarity >= 0.65 {
+	if avgScore >= 0.60 {
 		// High confidence: answer directly
 		confidenceInstruction = ""
-	} else if avgSimilarity >= 0.35 {
+	} else if avgScore >= 0.30 {
 		// Medium confidence: add caveat
 		confidenceInstruction = "\n9. Start your answer with 'Based on what I found in your journals...' to indicate moderate confidence"
 	}

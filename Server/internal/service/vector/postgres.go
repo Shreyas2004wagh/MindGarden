@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type PostgresStore struct {
@@ -109,7 +110,112 @@ func (s *PostgresStore) Search(query Vector, k int) ([]Document, error) {
 	return docs, nil
 }
 
-// Helper to ensure the table exists (for simple migration)
+// HybridSearch performs combined keyword (BM25) and semantic (Vector) search
+// This implementation uses Reciprocal Rank Fusion (RRF) implicitly by simple weighting or just retrieving both sets and deduping, 
+// OR more advanced SQL that combines scores.
+// Here we'll do a simple weighted score in SQL for efficiency.
+//
+// Combined Score = (Semantic Score * alpha) + (Keyword Score * beta)
+// Semantic Score in pgvector with <=> is distance. Similarity is 1/(1+distance) or similar?
+// Let's use 1 - (embedding <=> query) as similarity (approx).
+// Keyword Score is ts_rank_cd using cover density.
+func (s *PostgresStore) HybridSearch(query string, embedding Vector, k int, userID string) ([]Document, error) {
+	embeddingBytes, err := json.Marshal(embedding)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal query embedding: %w", err)
+	}
+	embeddingStr := string(embeddingBytes)
+
+	// Expand query with synonyms
+	expandedQuery := s.ExpandQuery(query)
+	// Convert to tsquery format: "word1 | word2 | ..."
+	tsQueryStr := strings.Join(strings.Fields(expandedQuery), " | ")
+
+	sqlQuery := `
+		WITH semantic_search AS (
+			SELECT id, content, metadata, embedding,
+				   1 - (embedding <=> $1) as semantic_score
+			FROM embeddings
+			WHERE user_id = $2
+			ORDER BY embedding <=> $1
+			LIMIT $3
+		),
+		keyword_search AS (
+			SELECT id, content, metadata, embedding,
+				   ts_rank_cd(content_tsv, to_tsquery('english', $4)) as keyword_score
+			FROM embeddings
+			WHERE user_id = $2
+			  AND content_tsv @@ to_tsquery('english', $4)
+			ORDER BY keyword_score DESC
+			LIMIT $3
+		)
+		SELECT 
+			COALESCE(s.id, k.id) as id,
+			COALESCE(s.content, k.content) as content,
+			COALESCE(s.metadata, k.metadata) as metadata,
+			COALESCE(s.embedding, k.embedding) as embedding,
+			(COALESCE(s.semantic_score, 0) * 0.7 + COALESCE(k.keyword_score, 0) * 0.3) as final_score
+		FROM semantic_search s
+		FULL OUTER JOIN keyword_search k ON s.id = k.id
+		ORDER BY final_score DESC
+		LIMIT $3
+	`
+
+	rows, err := s.DB.Query(sqlQuery, embeddingStr, userID, k, tsQueryStr)
+	if err != nil {
+		return nil, fmt.Errorf("hybrid search failed: %w", err)
+	}
+	defer rows.Close()
+
+	var docs []Document
+	for rows.Next() {
+		var doc Document
+		var metadataBytes []byte
+		var embeddingStr string
+		var score float64
+
+		if err := rows.Scan(&doc.ID, &doc.Content, &metadataBytes, &embeddingStr, &score); err != nil {
+			return nil, fmt.Errorf("row scan failed: %w", err)
+		}
+
+		if err := json.Unmarshal(metadataBytes, &doc.Metadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+		}
+		
+		// Add score to metadata for debugging/UI
+		doc.Metadata["score"] = score
+
+		if err := json.Unmarshal([]byte(embeddingStr), &doc.Embedding); err != nil {
+			return nil, fmt.Errorf("failed to parse embedding: %w", err)
+		}
+
+		docs = append(docs, doc)
+	}
+	return docs, nil
+}
+
+// ExpandQuery expands the user query with synonyms
+func (s *PostgresStore) ExpandQuery(query string) string {
+	expansions := []string{query}
+	lowerQuery := strings.ToLower(query)
+
+	// Hardcoded synonyms for now (as per requirements)
+	// In production this could be DB-backed or use an external service
+	synonyms := map[string][]string{
+		"travel": {"visit", "trip", "journey", "vacation"},
+		"work":   {"job", "office", "career", "project"},
+		"feel":   {"emotion", "mood", "sentiment"},
+	}
+
+	for word, syns := range synonyms {
+		if strings.Contains(lowerQuery, word) {
+			expansions = append(expansions, syns...)
+		}
+	}
+	
+	// Join all unique terms
+	return strings.Join(expansions, " ")
+}
 func (s *PostgresStore) InitSchema() error {
 	// Enable pgvector
 	_, err := s.DB.Exec("CREATE EXTENSION IF NOT EXISTS vector")
