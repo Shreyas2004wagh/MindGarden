@@ -1,15 +1,13 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mindgarden/server/internal/service/chunker"
-	"github.com/mindgarden/server/internal/service/vector"
+	"github.com/mindgarden/server/internal/service/ingestion"
 )
 
 type CreateJournalRequest struct {
@@ -81,59 +79,50 @@ func CreateJournal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Trigger async ingestion for RAG (don't block response)
-	go func(journalCreatedAt time.Time) {
-		// Use background context since this runs after HTTP response
-		ctx := context.Background()
+	// Parse UUIDs safely
+	journalUID, err := uuid.Parse(journalID)
+	if err != nil {
+		http.Error(w, "Invalid internal journal ID", http.StatusInternalServerError)
+		return
+	}
+	userUID, err := uuid.Parse(userID)
+	if err != nil {
+		// user_id comes from JWT, so this might mean JWT sub is not UUID
+		http.Error(w, "Invalid user ID in token", http.StatusUnauthorized)
+		return
+	}
 
-		// Create ingestion request
-		ingestReq := IngestRequest{
-			JournalID: journalID,
-			Title:     title,
-			Content:   trimmedContent,
-			UserID:    userID,
-		}
+	// Queue ingestion job
+	if ingestionRepo == nil {
+		// Fallback or error if service not initialized
+		http.Error(w, "Ingestion service not available", http.StatusServiceUnavailable)
+		return
+	}
 
-		// Generate embeddings and store chunks
-		config := chunker.DefaultConfig()
-		chunks := chunker.ChunkText(ingestReq.Content, config)
+	jobID := uuid.New()
+	job := &ingestion.Job{
+		ID:        jobID,
+		JournalID: journalUID,
+		UserID:    userUID,
+		Title:     title,
+		Content:   trimmedContent,
+		Status:    ingestion.StatusPending,
+		CreatedAt: createdAt,
+		UpdatedAt: time.Now(),
+	}
 
-		for _, chunk := range chunks {
-			embedding, err := llmService.GetEmbedding(ctx, chunk.Content)
-			if err != nil {
-				// Log error but don't fail journal creation
-				println("Failed to generate embedding for journal", journalID, ":", err.Error())
-				continue
-			}
-
-			titleStr := ""
-			if ingestReq.Title != nil {
-				titleStr = *ingestReq.Title
-			}
-
-			doc := vector.Document{
-				ID:        uuid.New().String(),
-				Embedding: embedding,
-				Content:   chunk.Content,
-				Metadata: map[string]interface{}{
-					"user_id":      ingestReq.UserID,
-					"journal_id":   ingestReq.JournalID,
-					"chunk_index":  chunk.Index,
-					"total_chunks": chunk.TotalCount,
-					"title":        titleStr,
-					"timestamp":    journalCreatedAt, // Use journal creation time, not embedding time
-				},
-			}
-
-			if err := vectorStore.Add(doc); err != nil {
-				println("Failed to save embedding for journal", journalID, ":", err.Error())
-				continue
-			}
-		}
-
-		vectorStore.Save()
-		println("Successfully ingested journal", journalID, "with", len(chunks), "chunks")
-	}(createdAt) // Pass createdAt to goroutine
+	if err := ingestionRepo.CreateJob(r.Context(), job); err != nil {
+		// Log error but don't fail, or return error?
+		// Since journal is created, we should probably warn.
+		// For now, let's log and proceed, or we could handle it better.
+		// Using standard log for MVP
+		// log.Printf("Failed to queue ingestion job for journal %s: %v", journalID, err)
+		// Actually, if queueing fails, we might want to return 500 or just accept it?
+		// Since the journal is saved, we return 201.
+		// Just logging is safer for consistency.
+		http.Error(w, "Failed to queue ingestion job: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	// Return created journal immediately (don't wait for ingestion)
 	w.Header().Set("Content-Type", "application/json")
