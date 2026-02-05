@@ -10,3 +10,4 @@ storage/
 
 # System files
 .DS_Store
+*.exe
