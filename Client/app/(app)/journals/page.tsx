@@ -4,7 +4,7 @@ import type { Journal } from '@/lib/supabase/types';
 import { Button } from '@/components/ui/button';
 import { PenLine } from 'lucide-react';
 import { getAuthenticatedUser } from '@/lib/auth';
-import { formatJournalDate, getJournalPreview, getJournalDisplayTitle } from '@/lib/journal-utils';
+import { JournalFeed } from '@/components/journal-feed';
 
 export default async function JournalsPage() {
   const supabase = await createClient();
@@ -20,12 +20,9 @@ export default async function JournalsPage() {
 
   return (
     <div className="mx-auto max-w-4xl px-8 py-12">
-      <div className="mb-12 flex items-center justify-between">
+      <div className="mb-16 flex items-center justify-between">
         <div>
-          <h1 className="text-3xl tracking-tight text-foreground">Journals</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Your personal thinking space
-          </p>
+          <h1 className="text-5xl tracking-tight text-foreground leading-tight">Journals</h1>
         </div>
         <Link href="/journals/new">
           <Button className="gap-2">
@@ -48,27 +45,7 @@ export default async function JournalsPage() {
           </Link>
         </div>
       ) : (
-        <div className="space-y-8">
-          {journals.map((journal) => (
-            <Link
-              key={journal.id}
-              href={`/journals/${journal.id}`}
-              className="group block"
-            >
-              <article className="space-y-2 rounded-lg border border-transparent px-4 py-5 transition-colors hover:border-border hover:bg-card/50">
-                <time className="text-xs text-muted-foreground">
-                  {formatJournalDate(journal.created_at)}
-                </time>
-                <h2 className="text-lg text-foreground transition-colors group-hover:text-primary">
-                  {getJournalDisplayTitle(journal)}
-                </h2>
-                <p className="leading-relaxed text-muted-foreground">
-                  {getJournalPreview(journal.content)}
-                </p>
-              </article>
-            </Link>
-          ))}
-        </div>
+        <JournalFeed journals={journals} />
       )}
     </div>
   );
