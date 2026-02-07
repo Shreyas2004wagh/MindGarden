@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mindgarden/server/internal/observability"
 	"github.com/mindgarden/server/internal/service/chunker"
 	"github.com/mindgarden/server/internal/service/llm"
 	"github.com/mindgarden/server/internal/service/vector"
@@ -77,7 +78,9 @@ func (w *Worker) processNextJob() {
 	}
 
 	// Perform ingestion
+	ingestStart := time.Now()
 	if err := w.ingest(ctx, job); err != nil {
+		observability.RecordIngestion("failure", time.Since(ingestStart))
 		log.Printf("Job %s failed: %v", job.ID, err)
 		errMsg := err.Error()
 		w.repo.IncrementAttempts(ctx, job.ID)
@@ -104,6 +107,7 @@ func (w *Worker) processNextJob() {
 			w.repo.UpdateJobStatus(ctx, job.ID, StatusFailed, &errMsg)
 		}
 	} else {
+		observability.RecordIngestion("success", time.Since(ingestStart))
 		log.Printf("Job %s completed successfully", job.ID)
 		w.repo.UpdateJobStatus(ctx, job.ID, StatusCompleted, nil)
 	}

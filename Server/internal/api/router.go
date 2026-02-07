@@ -3,10 +3,12 @@ package api
 import (
 	"github.com/go-chi/chi/v5"
 	"github.com/mindgarden/server/internal/api/handlers"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func MountRoutes(r chi.Router) {
 	r.Get("/healthz", handlers.HealthCheck)
+	r.Handle("/metrics", promhttp.Handler())
 
 	// Initialize services (Simple global init for MVP)
 	handlers.InitServices()
