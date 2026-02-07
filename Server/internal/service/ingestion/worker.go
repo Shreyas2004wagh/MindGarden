@@ -82,6 +82,11 @@ func (w *Worker) processNextJob() {
 		errMsg := err.Error()
 		w.repo.IncrementAttempts(ctx, job.ID)
 
+		maxAttempts := job.MaxAttempts
+		if maxAttempts <= 0 {
+			maxAttempts = DefaultMaxAttempts
+		}
+
 		// Check max attempts
 		// Need to refresh job to get current attempts if they were incremented concurrently,
 		// but since we are the only worker processing this ID, we can assume local copy + 1 is accurate enough or just use the IncrementAttempts behavior.
@@ -89,13 +94,13 @@ func (w *Worker) processNextJob() {
 		// Let's assume we want to retry if attempts < MaxAttempts.
 		// We should probably read back the job or pass the incremented attempt count.
 		// For MVP, simplistic check:
-		if job.Attempts < job.MaxAttempts {
-			log.Printf("Job %s failed (attempt %d/%d). Retrying...", job.ID, job.Attempts+1, job.MaxAttempts)
+		if job.Attempts+1 < maxAttempts {
+			log.Printf("Job %s failed (attempt %d/%d). Retrying...", job.ID, job.Attempts+1, maxAttempts)
 			// Reset to pending so it gets picked up again
 			// Ideally we would add a backoff (e.g. valid_after column) but for MVP immediate retry or simple delay is fine.
 			w.repo.UpdateJobStatus(ctx, job.ID, StatusPending, &errMsg)
 		} else {
-			log.Printf("Job %s failed permanently after %d attempts.", job.ID, job.MaxAttempts)
+			log.Printf("Job %s failed permanently after %d attempts.", job.ID, maxAttempts)
 			w.repo.UpdateJobStatus(ctx, job.ID, StatusFailed, &errMsg)
 		}
 	} else {

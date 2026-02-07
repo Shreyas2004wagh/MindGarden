@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -37,6 +38,7 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 	// 1. Embed Question
 	qEmbedding, err := llmService.GetEmbedding(r.Context(), req.Question)
 	if err != nil {
+		log.Printf("AskAI: Embedding failed: %v", err)
 		http.Error(w, "Failed to embed question", http.StatusInternalServerError)
 		return
 	}
@@ -46,6 +48,7 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 	pgStore, ok := vectorStore.(*vector.PostgresStore)
 	if !ok {
 		// Fallback to regular search if not PostgresStore
+		log.Printf("AskAI: Vector Store Type Error")
 		http.Error(w, "Vector store not properly initialized", http.StatusInternalServerError)
 		return
 	}
@@ -54,6 +57,7 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 	// We don't filter by min similarity in DB anymore, we filter by confidence later
 	docs, err := pgStore.HybridSearch(req.Question, qEmbedding, 5, req.UserID)
 	if err != nil {
+		log.Printf("AskAI: HybridSearch failed: %v", err)
 		http.Error(w, "Vector search failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -77,20 +81,17 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Calculate average score for confidence assessment
-	var totalScore float64 // Using float64 as score is float64 in HybridSearch
+	var totalScore float64
 	for _, doc := range docs {
 		if score, ok := doc.Metadata["score"].(float64); ok {
 			totalScore += score
 		} else if similarity, ok := doc.Metadata["similarity"].(float32); ok {
-			// Fallback for non-hybrid results if any
 			totalScore += float64(similarity)
 		}
 	}
 	avgScore := float32(totalScore) / float32(len(docs))
 
 	// Tiered confidence approach
-	// low confidence: reject if average score is too low
-	// Hybrid score can be lower due to keyword component, but 0.30 seems safe baseline
 	if avgScore < 0.30 {
 		json.NewEncoder(w).Encode(AskResponse{
 			Answer: "I don't have enough information in your journals to answer that question confidently.",
@@ -102,7 +103,6 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 	if len(docs) == 1 {
 		score, ok := docs[0].Metadata["score"].(float64)
 		if !ok {
-			// fallback
 			if sim, ok := docs[0].Metadata["similarity"].(float32); ok {
 				score = float64(sim)
 			}
@@ -120,17 +120,14 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 	var sources []map[string]interface{}
 
 	for i, doc := range docs {
-		// Extract and format date
 		dateStr := "Unknown date"
 		if timestamp, ok := doc.Metadata["timestamp"].(time.Time); ok {
 			dateStr = timestamp.Format("January 2, 2006")
 		}
 
-		// Add chunk content to context with date
 		context.WriteString(fmt.Sprintf("Journal Entry %d (Written on %s):\n%s\n\n---\n\n",
 			i+1, dateStr, doc.Content))
 
-		// Collect source information
 		source := map[string]interface{}{
 			"journal_id": doc.Metadata["journal_id"],
 			"title":      doc.Metadata["title"],
@@ -142,13 +139,11 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 		sources = append(sources, source)
 	}
 
-	// 5. Enhanced prompt with strict anti-hallucination rules and temporal awareness
+	// 5. Enhanced prompt
 	confidenceInstruction := ""
 	if avgScore >= 0.60 {
-		// High confidence: answer directly
 		confidenceInstruction = ""
 	} else if avgScore >= 0.30 {
-		// Medium confidence: add caveat
 		confidenceInstruction = "\n9. Start your answer with 'Based on what I found in your journals...' to indicate moderate confidence"
 	}
 
@@ -174,6 +169,7 @@ Answer (remember: ONLY use information from the journal entries above):`, confid
 	// 6. Generate Answer
 	answer, err := llmService.GenerateAnswer(r.Context(), prompt)
 	if err != nil {
+		log.Printf("AskAI: GenerateAnswer failed: %v", err)
 		http.Error(w, "Failed to generate answer: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

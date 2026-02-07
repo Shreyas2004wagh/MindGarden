@@ -2,22 +2,21 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"os"
 	"sync"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 var (
-	db     *sql.DB
+	dbPool *pgxpool.Pool
 	dbOnce sync.Once
 )
 
-// InitDB initializes the database connection
+// InitDB initializes the database connection using pgxpool
 func InitDB() error {
 	var err error
 	dbOnce.Do(func() {
@@ -39,47 +38,55 @@ func InitDB() error {
 				port = "5432"
 			}
 
-			dbURL = fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=require",
-				host, port, user, password, dbname)
+			dbURL = fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
+				user, password, host, port, dbname)
 		}
 
-		db, err = sql.Open("pgx", dbURL)
-		if err != nil {
-			err = fmt.Errorf("failed to open database: %w", err)
+		config, parseErr := pgxpool.ParseConfig(dbURL)
+		if parseErr != nil {
+			err = fmt.Errorf("failed to parse database config: %w", parseErr)
 			return
 		}
 
-		// Set a timeout for the ping
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+		// Configure pool settings as requested
+		config.MaxConns = 25
+		config.MinConns = 5
+		config.MaxConnLifetime = time.Hour
+		config.MaxConnIdleTime = 30 * time.Minute
+
+		// Create the pool
+		dbPool, err = pgxpool.NewWithConfig(context.Background(), config)
+		if err != nil {
+			err = fmt.Errorf("failed to create database pool: %w", err)
+			return
+		}
 
 		// Test connection
-		if err = db.PingContext(ctx); err != nil {
+		if err = dbPool.Ping(context.Background()); err != nil {
 			err = fmt.Errorf("failed to ping database: %w", err)
 			return
 		}
 
-		// Set connection pool settings
-		db.SetMaxOpenConns(25)
-		db.SetMaxIdleConns(5)
-
-		log.Println("Database connection established")
+		log.Println("Database connection established with pgxpool")
 	})
 
 	return err
 }
 
-// getDB returns the database instance
-func getDB() *sql.DB {
-	return db
+// GetDB returns the database pool instance
+// Note: This matches the casing of the previous getDB but assumes public access might be needed, 
+// though for this package private getDB was used. 
+// Refactoring to public GetDB is safer for cross-package use if needed, 
+// but keeping consistent with existing usage pattern in this file.
+func GetDB() *pgxpool.Pool {
+	return dbPool
 }
 
 // CloseDB closes the database connection
-func CloseDB() error {
-	if db != nil {
-		return db.Close()
+func CloseDB() {
+	if dbPool != nil {
+		dbPool.Close()
 	}
-	return nil
 }
 
 // insertJournal inserts a new journal entry into the database
@@ -91,7 +98,11 @@ func insertJournal(ctx context.Context, journalID, userID string, title *string,
 	`
 
 	var journal JournalResponse
-	err := getDB().QueryRowContext(ctx, query, journalID, userID, title, content, createdAt).Scan(
+	// pgx uses QueryRow, but scanning is slightly different (no .Scan on the row itself directly in the same way with stdlib compatibility wrappers, 
+	// but pgxnative supports .Scan). 
+	// However, since we are using pgxpool, we use QueryRow.
+	
+	err := GetDB().QueryRow(ctx, query, journalID, userID, title, content, createdAt).Scan(
 		&journal.ID,
 		&journal.UserID,
 		&journal.Title,

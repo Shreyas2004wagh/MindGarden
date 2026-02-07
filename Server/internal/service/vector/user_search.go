@@ -1,6 +1,7 @@
 package vector
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -29,7 +30,7 @@ func (s *PostgresStore) SearchByUser(query Vector, k int, userID string, minSimi
 		LIMIT $4
 	`
 
-	rows, err := s.DB.Query(sqlQuery, embeddingStr, userID, maxDistance, k)
+	rows, err := s.Pool.Query(context.Background(), sqlQuery, embeddingStr, userID, maxDistance, k)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +41,7 @@ func (s *PostgresStore) SearchByUser(query Vector, k int, userID string, minSimi
 		var doc Document
 		var metadataBytes []byte
 		var embeddingStr string
-		var distance float32
+		var distance float64 // pgx returns float64 for float8
 
 		if err := rows.Scan(&doc.ID, &doc.Content, &metadataBytes, &embeddingStr, &distance); err != nil {
 			return nil, err
@@ -64,7 +65,7 @@ func (s *PostgresStore) SearchByUser(query Vector, k int, userID string, minSimi
 		}
 
 		// Store similarity score in metadata for reference
-		doc.Metadata["similarity"] = 1.0 - distance
+		doc.Metadata["similarity"] = float32(1.0 - distance)
 
 		docs = append(docs, doc)
 	}
@@ -74,6 +75,6 @@ func (s *PostgresStore) SearchByUser(query Vector, k int, userID string, minSimi
 // DeleteByJournalID deletes all embeddings for a specific journal
 func (s *PostgresStore) DeleteByJournalID(journalID string, userID string) error {
 	query := `DELETE FROM embeddings WHERE journal_id = $1 AND user_id = $2`
-	_, err := s.DB.Exec(query, journalID, userID)
+	_, err := s.Pool.Exec(context.Background(), query, journalID, userID)
 	return err
 }

@@ -29,14 +29,24 @@ export default function AskPage() {
       });
 
       if (!response.ok) {
-        throw new Error('Failed to get answer');
+        let errorMessage = 'Failed to get answer';
+        try {
+          const errorData = await response.json();
+          if (errorData?.error) {
+            errorMessage = errorData.error;
+          }
+        } catch {
+          // Keep default error when non-JSON response is returned
+        }
+        throw new Error(errorMessage);
       }
 
       const data = await response.json();
       setAnswer(data.answer);
     } catch (error) {
       console.error('Error asking question:', error);
-      toast.error('Failed to get an answer. Please try again.');
+      const message = error instanceof Error ? error.message : 'Failed to get an answer.';
+      toast.error(message);
       setAnswer('');
     } finally {
       setLoading(false);
