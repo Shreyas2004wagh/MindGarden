@@ -22,6 +22,10 @@ type IngestRequest struct {
 	CreatedAt time.Time `json:"created_at"` // Optional: journal creation time
 }
 
+type BatchIngestRequest struct {
+	Journals []IngestRequest `json:"journals"`
+}
+
 // Global instances for MVP simplicity. In production use dependency injection.
 var (
 	llmService      *llm.Service
@@ -32,12 +36,12 @@ var (
 
 func InitServices() {
 	log.Println("InitServices: Starting...")
-	
+
 	llmService = llm.NewService()
 	log.Println("InitServices: LLM Service initialized")
 
 	// Initialize Postgres Vector Store
-	pgStore := vector.NewPostgresStore(getDB())
+	pgStore := vector.NewPostgresStore(GetDB())
 	if err := pgStore.InitSchema(); err != nil {
 		log.Println("InitServices: Failed to init vector schema:", err.Error())
 	} else {
@@ -46,7 +50,7 @@ func InitServices() {
 	vectorStore = pgStore
 
 	// Initialize Ingestion System
-	ingestionRepo = ingestion.NewPostgresRepository(getDB())
+	ingestionRepo = ingestion.NewPostgresRepository(GetDB())
 	if err := ingestionRepo.InitSchema(context.Background()); err != nil {
 		log.Println("InitServices: Failed to init ingestion schema:", err.Error())
 	} else {
@@ -92,14 +96,16 @@ func IngestJournal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	job := &ingestion.Job{
-		ID:        jobID,
-		JournalID: journalUID,
-		UserID:    userUID,
-		Title:     req.Title,
-		Content:   req.Content,
-		Status:    ingestion.StatusPending,
-		CreatedAt: timestamp,
-		UpdatedAt: time.Now(),
+		ID:          jobID,
+		JournalID:   journalUID,
+		UserID:      userUID,
+		Title:       req.Title,
+		Content:     req.Content,
+		Status:      ingestion.StatusPending,
+		Attempts:    0,
+		MaxAttempts: ingestion.DefaultMaxAttempts,
+		CreatedAt:   timestamp,
+		UpdatedAt:   time.Now(),
 	}
 
 	// Create Job in DB
@@ -113,5 +119,48 @@ func IngestJournal(w http.ResponseWriter, r *http.Request) {
 		"status":  "pending",
 		"job_id":  jobID.String(),
 		"message": "Ingestion job queued",
+	})
+}
+
+func IngestJournalBatch(w http.ResponseWriter, r *http.Request) {
+	if ingestionWorker == nil {
+		http.Error(w, "Ingestion worker not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	var req BatchIngestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Journals) == 0 {
+		http.Error(w, "journals array is required", http.StatusBadRequest)
+		return
+	}
+
+	journals := make([]ingestion.IngestionJournal, 0, len(req.Journals))
+	for _, journal := range req.Journals {
+		journals = append(journals, ingestion.IngestionJournal{
+			JournalID: journal.JournalID,
+			UserID:    journal.UserID,
+			Title:     journal.Title,
+			Content:   journal.Content,
+			CreatedAt: journal.CreatedAt,
+		})
+	}
+
+	result, err := ingestionWorker.BatchIngest(r.Context(), journals)
+	if err != nil {
+		http.Error(w, "Batch ingestion failed: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "accepted",
+		"message": "Batch ingestion queued",
+		"result":  result,
 	})
 }

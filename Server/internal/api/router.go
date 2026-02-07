@@ -7,7 +7,7 @@ import (
 
 func MountRoutes(r chi.Router) {
 	r.Get("/healthz", handlers.HealthCheck)
-	
+
 	// Initialize services (Simple global init for MVP)
 	handlers.InitServices()
 
@@ -16,5 +16,6 @@ func MountRoutes(r chi.Router) {
 
 	// AI/RAG endpoints
 	r.Post("/ingest", handlers.IngestJournal)
+	r.Post("/ingest/batch", handlers.IngestJournalBatch)
 	r.Post("/ask", handlers.AskAI)
 }

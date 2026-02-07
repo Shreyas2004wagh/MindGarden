@@ -101,14 +101,16 @@ func CreateJournal(w http.ResponseWriter, r *http.Request) {
 
 	jobID := uuid.New()
 	job := &ingestion.Job{
-		ID:        jobID,
-		JournalID: journalUID,
-		UserID:    userUID,
-		Title:     title,
-		Content:   trimmedContent,
-		Status:    ingestion.StatusPending,
-		CreatedAt: createdAt,
-		UpdatedAt: time.Now(),
+		ID:          jobID,
+		JournalID:   journalUID,
+		UserID:      userUID,
+		Title:       title,
+		Content:     trimmedContent,
+		Status:      ingestion.StatusPending,
+		Attempts:    0,
+		MaxAttempts: ingestion.DefaultMaxAttempts,
+		CreatedAt:   createdAt,
+		UpdatedAt:   time.Now(),
 	}
 
 	if err := ingestionRepo.CreateJob(r.Context(), job); err != nil {
