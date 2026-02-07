@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mindgarden/server/internal/observability"
 	"github.com/mindgarden/server/internal/service/vector"
 )
 
@@ -55,7 +56,9 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 
 	// Hybrid Search with 5 results
 	// We don't filter by min similarity in DB anymore, we filter by confidence later
+	searchStart := time.Now()
 	docs, err := pgStore.HybridSearch(req.Question, qEmbedding, 5, req.UserID)
+	observability.RecordSearchDuration(time.Since(searchStart))
 	if err != nil {
 		log.Printf("AskAI: HybridSearch failed: %v", err)
 		http.Error(w, "Vector search failed: "+err.Error(), http.StatusInternalServerError)

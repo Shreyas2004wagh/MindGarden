@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/google/generative-ai-go/genai"
+	"github.com/mindgarden/server/internal/observability"
 	openai "github.com/sashabaranov/go-openai"
 	"google.golang.org/api/option"
 )
@@ -190,6 +191,8 @@ func (s *Service) GetEmbedding(ctx context.Context, text string) ([]float32, err
 			lastErr,
 		)
 	}
+
+	observability.RecordEmbeddingCostEstimate(text)
 
 	// Cache Result
 	values = normalizeEmbeddingDimensions(values, s.embedDims)
