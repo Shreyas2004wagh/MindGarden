@@ -13,11 +13,15 @@ func MountRoutes(r chi.Router) {
 	// Initialize services (Simple global init for MVP)
 	handlers.InitServices()
 
-	// Journal endpoints
-	r.Post("/journals", handlers.CreateJournal)
+	r.Group(func(r chi.Router) {
+		r.Use(handlers.RateLimitMiddleware)
 
-	// AI/RAG endpoints
-	r.Post("/ingest", handlers.IngestJournal)
-	r.Post("/ingest/batch", handlers.IngestJournalBatch)
-	r.Post("/ask", handlers.AskAI)
+		// Journal endpoints
+		r.Post("/journals", handlers.CreateJournal)
+
+		// AI/RAG endpoints
+		r.Post("/ingest", handlers.IngestJournal)
+		r.Post("/ingest/batch", handlers.IngestJournalBatch)
+		r.Post("/ask", handlers.AskAI)
+	})
 }

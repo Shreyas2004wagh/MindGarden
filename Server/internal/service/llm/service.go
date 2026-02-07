@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/google/generative-ai-go/genai"
@@ -192,7 +193,7 @@ func (s *Service) GetEmbedding(ctx context.Context, text string) ([]float32, err
 		)
 	}
 
-	observability.RecordEmbeddingCostEstimate(text)
+	observability.TrackEmbeddingCost(utf8.RuneCountInString(text))
 
 	// Cache Result
 	values = normalizeEmbeddingDimensions(values, s.embedDims)
@@ -236,6 +237,8 @@ func (s *Service) GenerateAnswer(ctx context.Context, prompt string) (string, er
 	if err != nil {
 		return "", fmt.Errorf("groq generation error: %w", err)
 	}
+
+	observability.TrackLLMCost(resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
 
 	return resp.Choices[0].Message.Content, nil
 }
