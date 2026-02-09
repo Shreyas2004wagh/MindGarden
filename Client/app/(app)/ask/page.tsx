@@ -68,7 +68,7 @@ export default function AskPage() {
             placeholder="What patterns do I notice in my recent entries?"
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            className="min-h-[120px] resize-none text-base leading-relaxed"
+            className="min-h-[120px] resize-none text-base leading-relaxed bg-black/40 backdrop-blur-sm border-white/[0.06]"
             disabled={loading}
           />
           <Button onClick={handleAsk} disabled={!question.trim() || loading}>

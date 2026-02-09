@@ -48,11 +48,13 @@ func InitDB() error {
 			return
 		}
 
-		// Configure pool settings as requested
-		config.MaxConns = 25
-		config.MinConns = 5
+		// Configure pool settings for Supabase Transaction Pooler
+		// Keep these values low to avoid exceeding Supabase's connection limits
+		config.MaxConns = 5
+		config.MinConns = 2
 		config.MaxConnLifetime = time.Hour
 		config.MaxConnIdleTime = 30 * time.Minute
+		config.HealthCheckPeriod = 1 * time.Minute
 
 		// Create the pool
 		dbPool, err = pgxpool.NewWithConfig(context.Background(), config)
