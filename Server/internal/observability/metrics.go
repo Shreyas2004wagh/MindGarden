@@ -1,9 +1,6 @@
 package observability
 
 import (
-	"os"
-	"strconv"
-	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -41,6 +38,13 @@ var (
 			Help: "Estimated cost of embedding API calls",
 		},
 	)
+
+	llmCost = prometheus.NewCounter(
+		prometheus.CounterOpts{
+			Name: "llm_api_cost_usd",
+			Help: "Estimated cost of LLM API calls",
+		},
+	)
 )
 
 func init() {
@@ -49,6 +53,7 @@ func init() {
 		ingestionDuration,
 		searchDuration,
 		embeddingCost,
+		llmCost,
 	)
 }
 
@@ -65,39 +70,30 @@ func RecordSearchDuration(duration time.Duration) {
 }
 
 func RecordEmbeddingCostEstimate(text string) {
-	rate := embeddingCostRatePer1KTokens()
-	if rate <= 0 {
+	TrackEmbeddingCost(utf8.RuneCountInString(text))
+}
+
+func TrackEmbeddingCost(textLength int) {
+	if textLength <= 0 {
 		return
 	}
-
-	tokens := estimateTokenCount(text)
-	cost := (float64(tokens) / 1000.0) * rate
+	// Gemini pricing approximation: $0.00001 per 1000 chars.
+	cost := float64(textLength) / 1000.0 * 0.00001
 	if cost > 0 {
 		embeddingCost.Add(cost)
 	}
 }
 
-func embeddingCostRatePer1KTokens() float64 {
-	raw := strings.TrimSpace(os.Getenv("EMBEDDING_COST_PER_1K_TOKENS_USD"))
-	if raw == "" {
-		return 0
+func TrackLLMCost(promptTokens, completionTokens int) {
+	if promptTokens < 0 {
+		promptTokens = 0
 	}
-	value, err := strconv.ParseFloat(raw, 64)
-	if err != nil || value < 0 {
-		return 0
+	if completionTokens < 0 {
+		completionTokens = 0
 	}
-	return value
-}
-
-func estimateTokenCount(text string) int {
-	if text == "" {
-		return 0
+	// Groq pricing approximation by token type.
+	cost := (float64(promptTokens) * 0.00001) + (float64(completionTokens) * 0.00002)
+	if cost > 0 {
+		llmCost.Add(cost)
 	}
-	// Rough approximation for English-like text.
-	charCount := utf8.RuneCountInString(text)
-	tokens := charCount / 4
-	if tokens <= 0 {
-		return 1
-	}
-	return tokens
 }
