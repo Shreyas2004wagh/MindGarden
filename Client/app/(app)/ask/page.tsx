@@ -29,24 +29,14 @@ export default function AskPage() {
       });
 
       if (!response.ok) {
-        let errorMessage = 'Failed to get answer';
-        try {
-          const errorData = await response.json();
-          if (errorData?.error) {
-            errorMessage = errorData.error;
-          }
-        } catch {
-          // Keep default error when non-JSON response is returned
-        }
-        throw new Error(errorMessage);
+        throw new Error('Failed to get answer');
       }
 
       const data = await response.json();
       setAnswer(data.answer);
     } catch (error) {
       console.error('Error asking question:', error);
-      const message = error instanceof Error ? error.message : 'Failed to get an answer.';
-      toast.error(message);
+      toast.error('Failed to get an answer. Please try again.');
       setAnswer('');
     } finally {
       setLoading(false);
@@ -68,7 +58,7 @@ export default function AskPage() {
             placeholder="What patterns do I notice in my recent entries?"
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            className="min-h-[120px] resize-none text-base leading-relaxed bg-black/40 backdrop-blur-sm border-white/[0.06]"
+            className="min-h-[120px] resize-none text-base leading-relaxed"
             disabled={loading}
           />
           <Button onClick={handleAsk} disabled={!question.trim() || loading}>

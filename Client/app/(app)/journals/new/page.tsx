@@ -72,61 +72,58 @@ export default function NewJournalPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center px-6 py-12">
-      {/* Writing Canvas - centered, comfortable, page-like */}
-      <div className="w-full max-w-4xl rounded-2xl bg-black/40 backdrop-blur-sm border border-white/[0.06] shadow-2xl shadow-black/20 px-12 py-16">
-        {/* Back and Save buttons - subtle, non-competing */}
-        <div className="mb-16 flex items-center justify-between">
-          <Link
-            href="/journals"
-            className="group flex items-center gap-2 text-xs text-white/40 transition-colors hover:text-white/70"
-          >
-            <ArrowLeft className="h-3 w-3 transition-transform group-hover:-translate-x-0.5" />
-            <span>Back</span>
-          </Link>
+    <div className="mx-auto max-w-[900px] px-6 py-12">
+      {/* Back and Save buttons - inline, subtle */}
+      <div className="mb-12 flex items-center justify-between">
+        <Link
+          href="/journals"
+          className="group flex items-center gap-2 text-sm text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <ArrowLeft className="h-3.5 w-3.5 transition-transform group-hover:-translate-x-0.5" />
+          <span>Back</span>
+        </Link>
 
-          <button
-            onClick={handleSave}
-            disabled={!content.trim() || saving}
-            className="flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-medium transition-all disabled:opacity-30 disabled:cursor-not-allowed enabled:hover:bg-white/5 enabled:text-white/70 text-white/40"
-          >
-            {saving ? (
-              <>
-                <div className="h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                <span>Saving...</span>
-              </>
-            ) : (
-              <>
-                <Check className="h-3 w-3" />
-                <span>Save</span>
-              </>
-            )}
-          </button>
-        </div>
+        <button
+          onClick={handleSave}
+          disabled={!content.trim() || saving}
+          className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-all disabled:opacity-40 disabled:cursor-not-allowed enabled:hover:bg-accent/50 enabled:text-foreground text-muted-foreground"
+        >
+          {saving ? (
+            <>
+              <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              <span>Saving...</span>
+            </>
+          ) : (
+            <>
+              <Check className="h-3.5 w-3.5" />
+              <span>Save</span>
+            </>
+          )}
+        </button>
+      </div>
 
-        {/* Editor - calm, spacious, focused */}
-        <div className="space-y-4 pb-12">
-          {/* Title input - large, elegant, serif */}
-          <input
-            type="text"
-            placeholder="Untitled"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            className="w-full border-0 bg-transparent px-0 text-4xl font-semibold leading-tight tracking-tight text-foreground placeholder:text-white/10 focus:outline-none focus:ring-0 "
-            style={{ caretColor: 'hsl(var(--foreground))' }}
-          />
+      {/* Editor - calm, spacious */}
+      <div className="space-y-8 pb-24">
+        {/* Title input - large, elegant */}
+        <input
+          type="text"
+          placeholder="Untitled"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          className="w-full border-0 bg-transparent px-0 text-4xl font-semibold leading-tight tracking-tight text-foreground placeholder:text-muted-foreground/20 focus:outline-none focus:ring-0"
+          style={{ caretColor: 'hsl(var(--foreground))' }}
+        />
 
-          {/* Body textarea - auto-expanding, controlled line length */}
-          <textarea
-            ref={textareaRef}
-            placeholder="Start writing..."
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            className="min-h-[60vh] w-full resize-none overflow-hidden border-0 bg-transparent px-0 text-lg leading-[1.8] text-foreground placeholder:text-white/10 focus:outline-none focus:ring-0"
-            autoFocus
-            style={{ caretColor: 'hsl(var(--foreground))' }}
-          />
-        </div>
+        {/* Body textarea - auto-expanding, no internal scroll */}
+        <textarea
+          ref={textareaRef}
+          placeholder="Start writing..."
+          value={content}
+          onChange={(e) => setContent(e.target.value)}
+          className="min-h-[60vh] w-full resize-none overflow-hidden border-0 bg-transparent px-0 text-lg leading-[1.8] text-foreground placeholder:text-muted-foreground/20 focus:outline-none focus:ring-0"
+          autoFocus
+          style={{ caretColor: 'hsl(var(--foreground))' }}
+        />
       </div>
     </div>
   );

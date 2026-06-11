@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -25,22 +26,7 @@ type JournalResponse struct {
 }
 
 func CreateJournal(w http.ResponseWriter, r *http.Request) {
-	// Extract JWT from Authorization header
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" {
-		http.Error(w, "Authorization header required", http.StatusUnauthorized)
-		return
-	}
-
-	// Extract Bearer token
-	token := strings.TrimPrefix(authHeader, "Bearer ")
-	if token == authHeader {
-		http.Error(w, "Invalid authorization format. Expected: Bearer <token>", http.StatusUnauthorized)
-		return
-	}
-
-	// Verify JWT and extract user_id (using simple HS256 verification)
-	userID, err := verifySupabaseJWT(token)
+	userID, err := authenticatedUserID(r)
 	if err != nil {
 		http.Error(w, "Invalid or expired token: "+err.Error(), http.StatusUnauthorized)
 		return
@@ -94,36 +80,23 @@ func CreateJournal(w http.ResponseWriter, r *http.Request) {
 
 	// Queue ingestion job
 	if ingestionRepo == nil {
-		// Fallback or error if service not initialized
-		http.Error(w, "Ingestion service not available", http.StatusServiceUnavailable)
-		return
-	}
+		log.Printf("Ingestion service unavailable; journal %s was saved without an ingestion job", journalID)
+	} else {
+		jobID := uuid.New()
+		job := &ingestion.Job{
+			ID:        jobID,
+			JournalID: journalUID,
+			UserID:    userUID,
+			Title:     title,
+			Content:   trimmedContent,
+			Status:    ingestion.StatusPending,
+			CreatedAt: createdAt,
+			UpdatedAt: time.Now(),
+		}
 
-	jobID := uuid.New()
-	job := &ingestion.Job{
-		ID:          jobID,
-		JournalID:   journalUID,
-		UserID:      userUID,
-		Title:       title,
-		Content:     trimmedContent,
-		Status:      ingestion.StatusPending,
-		Attempts:    0,
-		MaxAttempts: ingestion.DefaultMaxAttempts,
-		CreatedAt:   createdAt,
-		UpdatedAt:   time.Now(),
-	}
-
-	if err := ingestionRepo.CreateJob(r.Context(), job); err != nil {
-		// Log error but don't fail, or return error?
-		// Since journal is created, we should probably warn.
-		// For now, let's log and proceed, or we could handle it better.
-		// Using standard log for MVP
-		// log.Printf("Failed to queue ingestion job for journal %s: %v", journalID, err)
-		// Actually, if queueing fails, we might want to return 500 or just accept it?
-		// Since the journal is saved, we return 201.
-		// Just logging is safer for consistency.
-		http.Error(w, "Failed to queue ingestion job: "+err.Error(), http.StatusInternalServerError)
-		return
+		if err := ingestionRepo.CreateJob(r.Context(), job); err != nil {
+			log.Printf("Failed to queue ingestion job for journal %s: %v", journalID, err)
+		}
 	}
 
 	// Return created journal immediately (don't wait for ingestion)

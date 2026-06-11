@@ -1,12 +1,27 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   let response = NextResponse.next({
     request: {
       headers: request.headers,
     },
   });
+
+  const isAuthPage = request.nextUrl.pathname.startsWith('/login') ||
+                     request.nextUrl.pathname.startsWith('/register');
+  const isVerifyPage = request.nextUrl.pathname.startsWith('/verify-email');
+  const isCallbackPage = request.nextUrl.pathname.startsWith('/auth/callback');
+  const hasSupabaseConfig =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+
+  if (!hasSupabaseConfig) {
+    if (isAuthPage || isVerifyPage || isCallbackPage) {
+      return response;
+    }
+    return NextResponse.redirect(new URL('/login', request.url));
+  }
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -32,11 +47,6 @@ export async function middleware(request: NextRequest) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
-  const isAuthPage = request.nextUrl.pathname.startsWith('/login') || 
-                     request.nextUrl.pathname.startsWith('/register');
-  const isVerifyPage = request.nextUrl.pathname.startsWith('/verify-email');
-  const isCallbackPage = request.nextUrl.pathname.startsWith('/auth/callback');
 
   if (!user && !isAuthPage && !isVerifyPage && !isCallbackPage) {
     return NextResponse.redirect(new URL('/login', request.url));

@@ -3,13 +3,11 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/mindgarden/server/internal/observability"
 	"github.com/mindgarden/server/internal/service/vector"
 )
 
@@ -24,43 +22,56 @@ type AskResponse struct {
 }
 
 func AskAI(w http.ResponseWriter, r *http.Request) {
+	userID, err := authenticatedUserID(r)
+	if err != nil {
+		http.Error(w, "Invalid or expired token: "+err.Error(), http.StatusUnauthorized)
+		return
+	}
+
 	var req AskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Validate user_id
-	if req.UserID == "" {
-		http.Error(w, "user_id is required", http.StatusBadRequest)
+	req.Question = strings.TrimSpace(req.Question)
+	if req.Question == "" {
+		http.Error(w, "question is required", http.StatusBadRequest)
+		return
+	}
+
+	if req.UserID != "" && req.UserID != userID {
+		http.Error(w, "user_id does not match authenticated user", http.StatusForbidden)
+		return
+	}
+	req.UserID = userID
+
+	if llmService == nil || vectorStore == nil {
+		http.Error(w, "AI services are not initialized", http.StatusServiceUnavailable)
 		return
 	}
 
 	// 1. Embed Question
 	qEmbedding, err := llmService.GetEmbedding(r.Context(), req.Question)
 	if err != nil {
-		log.Printf("AskAI: Embedding failed: %v", err)
 		http.Error(w, "Failed to embed question", http.StatusInternalServerError)
 		return
 	}
 
 	// 2. Search with user isolation and similarity threshold
-	// Use HybridSearch for better recall (keywords + semantic)
+	// Use SearchByUser from user_search.go for privacy and quality
 	pgStore, ok := vectorStore.(*vector.PostgresStore)
 	if !ok {
 		// Fallback to regular search if not PostgresStore
-		log.Printf("AskAI: Vector Store Type Error")
 		http.Error(w, "Vector store not properly initialized", http.StatusInternalServerError)
 		return
 	}
 
-	// Hybrid Search with 5 results
-	// We don't filter by min similarity in DB anymore, we filter by confidence later
-	searchStart := time.Now()
-	docs, err := pgStore.HybridSearch(req.Question, qEmbedding, 5, req.UserID)
-	observability.RecordSearchDuration(time.Since(searchStart))
+	// Minimum similarity of 0.35 (35% cosine similarity)
+	// This balances between quality and recall for journal queries
+	// Lower threshold allows more relevant chunks while tiered confidence handles quality
+	docs, err := pgStore.SearchByUser(qEmbedding, 5, req.UserID, 0.35)
 	if err != nil {
-		log.Printf("AskAI: HybridSearch failed: %v", err)
 		http.Error(w, "Vector search failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -83,19 +94,18 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 		return false
 	})
 
-	// Calculate average score for confidence assessment
-	var totalScore float64
+	// Calculate average similarity for confidence assessment
+	var totalSimilarity float32
 	for _, doc := range docs {
-		if score, ok := doc.Metadata["score"].(float64); ok {
-			totalScore += score
-		} else if similarity, ok := doc.Metadata["similarity"].(float32); ok {
-			totalScore += float64(similarity)
+		if similarity, ok := doc.Metadata["similarity"].(float32); ok {
+			totalSimilarity += similarity
 		}
 	}
-	avgScore := float32(totalScore) / float32(len(docs))
+	avgSimilarity := totalSimilarity / float32(len(docs))
 
 	// Tiered confidence approach
-	if avgScore < 0.30 {
+	// Low confidence: reject if average similarity is too low
+	if avgSimilarity < 0.35 {
 		json.NewEncoder(w).Encode(AskResponse{
 			Answer: "I don't have enough information in your journals to answer that question confidently.",
 		})
@@ -104,13 +114,8 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 
 	// For single results, require slightly higher confidence
 	if len(docs) == 1 {
-		score, ok := docs[0].Metadata["score"].(float64)
-		if !ok {
-			if sim, ok := docs[0].Metadata["similarity"].(float32); ok {
-				score = float64(sim)
-			}
-		}
-		if score < 0.45 {
+		similarity, ok := docs[0].Metadata["similarity"].(float32)
+		if !ok || similarity < 0.50 {
 			json.NewEncoder(w).Encode(AskResponse{
 				Answer: "I'm not confident enough to answer based on your journals. The information might not be directly related to your question.",
 			})
@@ -123,18 +128,21 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 	var sources []map[string]interface{}
 
 	for i, doc := range docs {
+		// Extract and format date
 		dateStr := "Unknown date"
 		if timestamp, ok := doc.Metadata["timestamp"].(time.Time); ok {
 			dateStr = timestamp.Format("January 2, 2006")
 		}
 
+		// Add chunk content to context with date
 		context.WriteString(fmt.Sprintf("Journal Entry %d (Written on %s):\n%s\n\n---\n\n",
 			i+1, dateStr, doc.Content))
 
+		// Collect source information
 		source := map[string]interface{}{
 			"journal_id": doc.Metadata["journal_id"],
 			"title":      doc.Metadata["title"],
-			"score":      doc.Metadata["score"],
+			"similarity": doc.Metadata["similarity"],
 		}
 		if timestamp, ok := doc.Metadata["timestamp"].(time.Time); ok {
 			source["date"] = timestamp.Format("2006-01-02")
@@ -142,11 +150,13 @@ func AskAI(w http.ResponseWriter, r *http.Request) {
 		sources = append(sources, source)
 	}
 
-	// 5. Enhanced prompt
+	// 5. Enhanced prompt with strict anti-hallucination rules and temporal awareness
 	confidenceInstruction := ""
-	if avgScore >= 0.60 {
+	if avgSimilarity >= 0.65 {
+		// High confidence: answer directly
 		confidenceInstruction = ""
-	} else if avgScore >= 0.30 {
+	} else if avgSimilarity >= 0.35 {
+		// Medium confidence: add caveat
 		confidenceInstruction = "\n9. Start your answer with 'Based on what I found in your journals...' to indicate moderate confidence"
 	}
 
@@ -172,7 +182,6 @@ Answer (remember: ONLY use information from the journal entries above):`, confid
 	// 6. Generate Answer
 	answer, err := llmService.GenerateAnswer(r.Context(), prompt)
 	if err != nil {
-		log.Printf("AskAI: GenerateAnswer failed: %v", err)
 		http.Error(w, "Failed to generate answer: "+err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -1,13 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 
-export default function VerifyEmailPage() {
+function VerifyEmailContent() {
     const [otp, setOtp] = useState('');
     const [loading, setLoading] = useState(false);
     const [resending, setResending] = useState(false);
@@ -136,5 +136,13 @@ export default function VerifyEmailPage() {
                 </form>
             </div>
         </div>
+    );
+}
+
+export default function VerifyEmailPage() {
+    return (
+        <Suspense fallback={null}>
+            <VerifyEmailContent />
+        </Suspense>
     );
 }

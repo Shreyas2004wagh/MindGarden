@@ -8,5 +8,7 @@ Server/.env.local
 .DS_Store
 node_modules/
 .next/
+Client/client-dev.log
+Server/server-dev.log
 
 .github/

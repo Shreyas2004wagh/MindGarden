@@ -2,20 +2,11 @@ package llm
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
-	"strings"
-	"time"
-	"unicode/utf8"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/google/generative-ai-go/genai"
-	"github.com/mindgarden/server/internal/observability"
 	openai "github.com/sashabaranov/go-openai"
 	"google.golang.org/api/option"
 )
@@ -23,9 +14,6 @@ import (
 type Service struct {
 	geminiClient *genai.Client
 	groqClient   *openai.Client
-	redisClient  *redis.Client
-	embedModel   string
-	embedDims    int
 }
 
 func NewService() *Service {
@@ -44,172 +32,26 @@ func NewService() *Service {
 	groqConfig.BaseURL = "https://api.groq.com/openai/v1"
 	oClient := openai.NewClientWithConfig(groqConfig)
 
-	// Redis Setup
-	redisURL := os.Getenv("REDIS_URL")
-	if redisURL == "" {
-		redisURL = "localhost:6379"
-	}
-
-	// Check if URL starts with redis://, if so parse it, else treat as addr
-	var rOptions *redis.Options
-	if len(redisURL) > 8 && redisURL[:8] == "redis://" {
-		opt, err := redis.ParseURL(redisURL)
-		if err != nil {
-			fmt.Printf("Error parsing REDIS_URL: %v\n", err)
-			rOptions = &redis.Options{Addr: "localhost:6379"}
-		} else {
-			rOptions = opt
-		}
-	} else {
-		rOptions = &redis.Options{Addr: redisURL}
-	}
-
-	rClient := redis.NewClient(rOptions)
-
-	// Test Redis connection
-	if err := rClient.Ping(ctx).Err(); err != nil {
-		fmt.Printf("Warning: Failed to connect to Redis: %v. Caching disabled.\n", err)
-		// We keep rClient but maybe it will fail on calls.
-		// Or we can set it to nil and check before use.
-		// For now, let's keep it, maybe it comes up later.
-	} else {
-		fmt.Println("Redis connection established")
-	}
-
-	embedDims := 768
-	if raw := strings.TrimSpace(os.Getenv("EMBEDDING_DIMENSIONS")); raw != "" {
-		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
-			embedDims = parsed
-		}
-	}
-
 	return &Service{
 		geminiClient: gClient,
 		groqClient:   oClient,
-		redisClient:  rClient,
-		embedModel:   os.Getenv("GEMINI_EMBEDDING_MODEL"),
-		embedDims:    embedDims,
 	}
-}
-
-func buildEmbeddingModelCandidates(configured string) []string {
-	configured = strings.TrimSpace(configured)
-	if configured == "" {
-		configured = "gemini-embedding-001"
-	}
-
-	candidates := []string{configured}
-
-	if strings.HasPrefix(configured, "models/") {
-		trimmed := strings.TrimPrefix(configured, "models/")
-		if trimmed != "" {
-			candidates = append(candidates, trimmed)
-		}
-	} else {
-		candidates = append(candidates, "models/"+configured)
-	}
-
-	candidates = append(candidates, "gemini-embedding-001", "models/gemini-embedding-001")
-
-	uniq := make([]string, 0, len(candidates))
-	seen := map[string]bool{}
-	for _, candidate := range candidates {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" || seen[candidate] {
-			continue
-		}
-		seen[candidate] = true
-		uniq = append(uniq, candidate)
-	}
-	return uniq
-}
-
-func normalizeEmbeddingDimensions(values []float32, target int) []float32 {
-	if target <= 0 {
-		return values
-	}
-	if len(values) == target {
-		return values
-	}
-	if len(values) > target {
-		return values[:target]
-	}
-
-	out := make([]float32, target)
-	copy(out, values)
-	return out
 }
 
 func (s *Service) GetEmbedding(ctx context.Context, text string) ([]float32, error) {
-	// Check Cache
-	if s.redisClient != nil {
-		hash := sha256.Sum256([]byte(text))
-		hashStr := hex.EncodeToString(hash[:])
-		cacheKey := fmt.Sprintf("emb:%d:%s", s.embedDims, hashStr)
-
-		val, err := s.redisClient.Get(ctx, cacheKey).Result()
-		if err == nil {
-			var embedding []float32
-			if err := json.Unmarshal([]byte(val), &embedding); err == nil {
-				return normalizeEmbeddingDimensions(embedding, s.embedDims), nil
-			}
-		} else if err != redis.Nil {
-			// Log error but continue
-			fmt.Printf("Redis error: %v\n", err)
-		}
-	}
-
 	if s.geminiClient == nil {
 		return nil, errors.New("gemini client not initialized")
 	}
-
-	modelCandidates := buildEmbeddingModelCandidates(s.embedModel)
-	var lastErr error
-	var values []float32
-
-	for _, modelName := range modelCandidates {
-		em := s.geminiClient.EmbeddingModel(modelName)
-		res, err := em.EmbedContent(ctx, genai.Text(text))
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if res == nil || res.Embedding == nil || len(res.Embedding.Values) == 0 {
-			lastErr = errors.New("no embedding returned")
-			continue
-		}
-		values = res.Embedding.Values
-		break
+	// Use text-embedding-004 for better performance/quality
+	em := s.geminiClient.EmbeddingModel("text-embedding-004")
+	res, err := em.EmbedContent(ctx, genai.Text(text))
+	if err != nil {
+		return nil, fmt.Errorf("gemini embedding error: %w", err)
 	}
-
-	if len(values) == 0 {
-		if lastErr == nil {
-			lastErr = errors.New("all embedding attempts failed")
-		}
-		return nil, fmt.Errorf(
-			"gemini embedding error (tried models: %s): %w",
-			strings.Join(modelCandidates, ", "),
-			lastErr,
-		)
+	if res.Embedding == nil {
+		return nil, errors.New("no embedding returned")
 	}
-
-	observability.TrackEmbeddingCost(utf8.RuneCountInString(text))
-
-	// Cache Result
-	values = normalizeEmbeddingDimensions(values, s.embedDims)
-
-	if s.redisClient != nil {
-		hash := sha256.Sum256([]byte(text))
-		hashStr := hex.EncodeToString(hash[:])
-		cacheKey := fmt.Sprintf("emb:%d:%s", s.embedDims, hashStr)
-
-		data, err := json.Marshal(values)
-		if err == nil {
-			s.redisClient.Set(ctx, cacheKey, data, 24*time.Hour)
-		}
-	}
-
-	return values, nil
+	return res.Embedding.Values, nil
 }
 
 func (s *Service) GenerateAnswer(ctx context.Context, prompt string) (string, error) {
@@ -237,8 +79,9 @@ func (s *Service) GenerateAnswer(ctx context.Context, prompt string) (string, er
 	if err != nil {
 		return "", fmt.Errorf("groq generation error: %w", err)
 	}
-
-	observability.TrackLLMCost(resp.Usage.PromptTokens, resp.Usage.CompletionTokens)
+	if len(resp.Choices) == 0 {
+		return "", errors.New("groq generation returned no choices")
+	}
 
 	return resp.Choices[0].Message.Content, nil
 }

@@ -9,9 +9,9 @@ import { formatJournalDate } from '@/lib/journal-utils';
 export default async function JournalDetailPage({
   params,
 }: {
-  params: Promise<{ id: string }>;
+  params: { id: string };
 }) {
-  const { id } = await params;
+  const { id } = params;
   const supabase = await createClient();
   const user = await getAuthenticatedUser();
 
@@ -42,22 +42,22 @@ export default async function JournalDetailPage({
       </div>
 
       {/* Article content - calm, spacious */}
-      <article className="space-y-10">
+      <article className="space-y-8">
         {/* Metadata - subtle */}
-        <time className="block text-[11px] tracking-wide uppercase text-muted-foreground/50">
+        <time className="block text-sm text-muted-foreground/60">
           {formatJournalDate(journal.created_at)}
         </time>
 
         {/* Title - large, elegant */}
         {journal.title && (
-          <h1 className="text-3xl font-semibold leading-tight tracking-tight text-foreground">
+          <h1 className="text-4xl font-semibold leading-tight tracking-tight text-foreground">
             {journal.title}
           </h1>
         )}
 
         {/* Content - generous spacing, calm */}
         <div className="prose prose-invert max-w-none">
-          <p className="whitespace-pre-wrap text-base leading-[1.8] text-foreground/90">
+          <p className="whitespace-pre-wrap text-lg leading-[1.8] text-foreground/95">
             {journal.content}
           </p>
         </div>

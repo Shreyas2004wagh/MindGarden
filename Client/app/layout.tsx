@@ -1,23 +1,11 @@
 import './globals.css';
 import type { Metadata } from 'next';
-import { Inter, Crimson_Pro } from 'next/font/google';
+import { Inter } from 'next/font/google';
+import { Suspense } from 'react';
 import { Toaster } from '@/components/ui/sonner';
 import { ProgressBar } from '@/components/progress-bar';
 
-// Warm modern sans-serif for body text and UI
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-sans',
-  display: 'swap',
-});
-
-// Artistic editorial serif for titles and headings
-const crimsonPro = Crimson_Pro({
-  subsets: ['latin'],
-  variable: '--font-serif',
-  display: 'swap',
-  weight: ['400', '600'],
-});
+const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'Mind Garden',
@@ -31,8 +19,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={`${inter.variable} ${crimsonPro.variable} ${inter.className}`}>
-        <ProgressBar />
+      <body className={inter.className}>
+        <Suspense fallback={null}>
+          <ProgressBar />
+        </Suspense>
         {children}
         <Toaster />
       </body>

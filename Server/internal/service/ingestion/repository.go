@@ -2,12 +2,11 @@ package ingestion
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Repository interface {
@@ -19,11 +18,11 @@ type Repository interface {
 }
 
 type PostgresRepository struct {
-	pool *pgxpool.Pool
+	db *sql.DB
 }
 
-func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
-	return &PostgresRepository{pool: pool}
+func NewPostgresRepository(db *sql.DB) *PostgresRepository {
+	return &PostgresRepository{db: db}
 }
 
 func (r *PostgresRepository) InitSchema(ctx context.Context) error {
@@ -44,14 +43,13 @@ func (r *PostgresRepository) InitSchema(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_jobs_status ON ingestion_jobs(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_jobs_created ON ingestion_jobs(created_at)`,
-		`UPDATE ingestion_jobs SET max_attempts = 3 WHERE max_attempts IS NULL OR max_attempts <= 0`,
-		`UPDATE ingestion_jobs
-		 SET status = 'pending', error_message = NULL
-		 WHERE status = 'failed' AND attempts < max_attempts`,
 	}
 
 	for i, q := range queries {
-		if _, err := r.pool.Exec(ctx, q); err != nil {
+		// Log start of each query (truncate for brevity)
+		// log.Printf("InitSchema: Executing query %d...", i)
+		// Using fmt.Println for immediate flush if log is buffered? Standard log is fine.
+		if _, err := r.db.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("failed to execute query %d: %w", i, err)
 		}
 	}
@@ -59,18 +57,11 @@ func (r *PostgresRepository) InitSchema(ctx context.Context) error {
 }
 
 func (r *PostgresRepository) CreateJob(ctx context.Context, job *Job) error {
-	if job.Attempts < 0 {
-		job.Attempts = 0
-	}
-	if job.MaxAttempts <= 0 {
-		job.MaxAttempts = DefaultMaxAttempts
-	}
-
 	query := `
 		INSERT INTO ingestion_jobs (id, journal_id, user_id, title, content, status, attempts, max_attempts, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`
-	_, err := r.pool.Exec(ctx, query,
+	_, err := r.db.ExecContext(ctx, query,
 		job.ID, job.JournalID, job.UserID, job.Title, job.Content,
 		job.Status, job.Attempts, job.MaxAttempts, job.CreatedAt, job.UpdatedAt,
 	)
@@ -91,12 +82,12 @@ func (r *PostgresRepository) GetPendingJob(ctx context.Context) (*Job, error) {
 	`
 
 	var job Job
-	err := r.pool.QueryRow(ctx, query).Scan(
+	err := r.db.QueryRowContext(ctx, query).Scan(
 		&job.ID, &job.JournalID, &job.UserID, &job.Title, &job.Content,
 		&job.Status, &job.Attempts, &job.MaxAttempts, &job.CreatedAt, &job.UpdatedAt,
 	)
 
-	if err == pgx.ErrNoRows {
+	if err == sql.ErrNoRows {
 		return nil, nil // No jobs available
 	}
 	if err != nil {
@@ -112,7 +103,7 @@ func (r *PostgresRepository) UpdateJobStatus(ctx context.Context, id uuid.UUID, 
 		    completed_at = CASE WHEN $1::text = 'completed' THEN $3 ELSE completed_at END
 		WHERE id = $4
 	`
-	_, err := r.pool.Exec(ctx, query, status, errorMessage, time.Now(), id)
+	_, err := r.db.ExecContext(ctx, query, status, errorMessage, time.Now(), id)
 	return err
 }
 
@@ -123,6 +114,6 @@ func (r *PostgresRepository) IncrementAttempts(ctx context.Context, id uuid.UUID
 		SET attempts = attempts + 1, updated_at = $1
 		WHERE id = $2
 	`
-	_, err := r.pool.Exec(ctx, query, time.Now(), id)
+	_, err := r.db.ExecContext(ctx, query, time.Now(), id)
 	return err
 }

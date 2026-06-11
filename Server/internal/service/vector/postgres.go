@@ -1,20 +1,17 @@
 package vector
 
 import (
-	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
-	"strings"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type PostgresStore struct {
-	Pool *pgxpool.Pool
+	DB *sql.DB
 }
 
-func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
-	return &PostgresStore{Pool: pool}
+func NewPostgresStore(db *sql.DB) *PostgresStore {
+	return &PostgresStore{DB: db}
 }
 
 func (s *PostgresStore) Add(doc Document) error {
@@ -35,22 +32,14 @@ func (s *PostgresStore) Add(doc Document) error {
 	// Extract user_id, journal_id, chunk_index, and title from metadata
 	userID, _ := doc.Metadata["user_id"].(string)
 	journalID, _ := doc.Metadata["journal_id"].(string)
-
-	// Handle chunk_index safely
-	var chunkIndex int
-	if ci, ok := doc.Metadata["chunk_index"].(int); ok {
-		chunkIndex = ci
-	} else if ci, ok := doc.Metadata["chunk_index"].(float64); ok {
-		chunkIndex = int(ci)
-	}
-
+	chunkIndex, _ := doc.Metadata["chunk_index"].(int)
 	title, _ := doc.Metadata["title"].(string)
 
 	query := `
 		INSERT INTO embeddings (id, user_id, journal_id, chunk_index, title, content, metadata, embedding)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`
-	_, err = s.Pool.Exec(context.Background(), query, doc.ID, userID, journalID, chunkIndex, title, doc.Content, metadataBytes, embeddingStr)
+	_, err = s.DB.Exec(query, doc.ID, userID, journalID, chunkIndex, title, doc.Content, metadataBytes, embeddingStr)
 	return err
 }
 
@@ -71,6 +60,10 @@ func (s *PostgresStore) Search(query Vector, k int) ([]Document, error) {
 	}
 	embeddingStr := string(embeddingBytes)
 
+	// Use <=> operator for cosine distance (ASC order usually means closest distance = most similar if normalized?
+	// Wait, cosine distance: 0 is identical, 2 is opposite.
+	// So Order By distance ASC.
+	// Note: 1 - cosine_similarity = cosine_distance for normalized vectors.
 	sqlQuery := `
 		SELECT id, content, metadata, embedding
 		FROM embeddings
@@ -78,7 +71,7 @@ func (s *PostgresStore) Search(query Vector, k int) ([]Document, error) {
 		LIMIT $2
 	`
 
-	rows, err := s.Pool.Query(context.Background(), sqlQuery, embeddingStr, k)
+	rows, err := s.DB.Query(sqlQuery, embeddingStr, k)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +91,16 @@ func (s *PostgresStore) Search(query Vector, k int) ([]Document, error) {
 			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
 		}
 
+		// Parse embedding string back to Vector if needed,
+		// or typically we don't strictly need the embedding returned in search results
+		// if we just want content/metadata.
+		// But let's parse it to be compliant with Document struct.
+		// pgvector returns string "[1,2,3]"
 		if err := json.Unmarshal([]byte(embeddingStr), &doc.Embedding); err != nil {
+			// Try to handle postgres specific formatting if json fails,
+			// but usually json unmarshal works on "[...]" string.
+			// If it fails, we might need manual parsing.
+			// Let's assume standard format for now.
 			return nil, fmt.Errorf("failed to parse embedding from db: %w", err)
 		}
 
@@ -107,110 +109,16 @@ func (s *PostgresStore) Search(query Vector, k int) ([]Document, error) {
 	return docs, nil
 }
 
-func (s *PostgresStore) HybridSearch(query string, embedding Vector, k int, userID string) ([]Document, error) {
-	embeddingBytes, err := json.Marshal(embedding)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal query embedding: %w", err)
-	}
-	embeddingStr := string(embeddingBytes)
-
-	// Expand query with synonyms
-	expandedQuery := s.ExpandQuery(query)
-	// Convert to tsquery format: "word1 | word2 | ..."
-	tsQueryStr := strings.Join(strings.Fields(expandedQuery), " | ")
-
-	sqlQuery := `
-		WITH semantic_search AS (
-			SELECT id, content, metadata, embedding,
-				   1 - (embedding <=> $1) as semantic_score
-			FROM embeddings
-			WHERE user_id = $2
-			ORDER BY embedding <=> $1
-			LIMIT $3
-		),
-		keyword_search AS (
-			SELECT id, content, metadata, embedding,
-				   ts_rank_cd(content_tsv, to_tsquery('english', $4)) as keyword_score
-			FROM embeddings
-			WHERE user_id = $2
-			  AND content_tsv @@ to_tsquery('english', $4)
-			ORDER BY keyword_score DESC
-			LIMIT $3
-		)
-		SELECT 
-			COALESCE(s.id, k.id) as id,
-			COALESCE(s.content, k.content) as content,
-			COALESCE(s.metadata, k.metadata) as metadata,
-			COALESCE(s.embedding, k.embedding) as embedding,
-			(COALESCE(s.semantic_score, 0) * 0.7 + COALESCE(k.keyword_score, 0) * 0.3) as final_score
-		FROM semantic_search s
-		FULL OUTER JOIN keyword_search k ON s.id = k.id
-		ORDER BY final_score DESC
-		LIMIT $3
-	`
-
-	rows, err := s.Pool.Query(context.Background(), sqlQuery, embeddingStr, userID, k, tsQueryStr)
-	if err != nil {
-		return nil, fmt.Errorf("hybrid search failed: %w", err)
-	}
-	defer rows.Close()
-
-	var docs []Document
-	for rows.Next() {
-		var doc Document
-		var metadataBytes []byte
-		var embeddingStr string
-		var score float64
-
-		if err := rows.Scan(&doc.ID, &doc.Content, &metadataBytes, &embeddingStr, &score); err != nil {
-			return nil, fmt.Errorf("row scan failed: %w", err)
-		}
-
-		if err := json.Unmarshal(metadataBytes, &doc.Metadata); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
-		}
-
-		// Add score to metadata for debugging/UI
-		doc.Metadata["score"] = score
-
-		if err := json.Unmarshal([]byte(embeddingStr), &doc.Embedding); err != nil {
-			return nil, fmt.Errorf("failed to parse embedding: %w", err)
-		}
-
-		docs = append(docs, doc)
-	}
-	return docs, nil
-}
-
-func (s *PostgresStore) ExpandQuery(query string) string {
-	expansions := []string{query}
-	lowerQuery := strings.ToLower(query)
-
-	synonyms := map[string][]string{
-		"travel": {"visit", "trip", "journey", "vacation"},
-		"work":   {"job", "office", "career", "project"},
-		"feel":   {"emotion", "mood", "sentiment"},
-	}
-
-	for word, syns := range synonyms {
-		if strings.Contains(lowerQuery, word) {
-			expansions = append(expansions, syns...)
-		}
-	}
-
-	// Join all unique terms
-	return strings.Join(expansions, " ")
-}
-
+// Helper to ensure the table exists (for simple migration)
 func (s *PostgresStore) InitSchema() error {
-	ctx := context.Background()
 	// Enable pgvector
-	_, err := s.Pool.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS vector")
+	_, err := s.DB.Exec("CREATE EXTENSION IF NOT EXISTS vector")
 	if err != nil {
 		return fmt.Errorf("failed to create vector extension: %w", err)
 	}
 
 	// Create table with enhanced schema
+	// Using 768 dimensions for Gemini text-embedding-004
 	query := `
 		CREATE TABLE IF NOT EXISTS embeddings (
 			id UUID PRIMARY KEY,
@@ -221,57 +129,12 @@ func (s *PostgresStore) InitSchema() error {
 			content TEXT,
 			metadata JSONB,
 			embedding vector(768),
-			created_at TIMESTAMP DEFAULT NOW(),
-			content_tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', content)) STORED
+			created_at TIMESTAMP DEFAULT NOW()
 		)
 	`
-	_, err = s.Pool.Exec(ctx, query)
+	_, err = s.DB.Exec(query)
 	if err != nil {
 		return fmt.Errorf("failed to create embeddings table: %w", err)
-	}
-
-	// Clean up legacy trigger/function introduced by earlier migrations.
-	// We use generated column `content_tsv`, so trigger maintenance is unnecessary.
-	cleanupQueries := []string{
-		"DROP TRIGGER IF EXISTS embeddings_content_tsv_update ON embeddings",
-	}
-	for _, cleanupQuery := range cleanupQueries {
-		if _, err = s.Pool.Exec(ctx, cleanupQuery); err != nil {
-			return fmt.Errorf("failed schema cleanup query: %w", err)
-		}
-	}
-
-	// Normalize `content_tsv` so existing environments with a plain TSVECTOR column
-	// (or incompatible trigger setup) are migrated to the generated-column design.
-	_, err = s.Pool.Exec(ctx, `
-		DO $$
-		BEGIN
-			IF EXISTS (
-				SELECT 1
-				FROM information_schema.columns
-				WHERE table_schema = 'public'
-				  AND table_name = 'embeddings'
-				  AND column_name = 'content_tsv'
-				  AND is_generated <> 'ALWAYS'
-			) THEN
-				ALTER TABLE embeddings DROP COLUMN content_tsv;
-			END IF;
-
-			IF NOT EXISTS (
-				SELECT 1
-				FROM information_schema.columns
-				WHERE table_schema = 'public'
-				  AND table_name = 'embeddings'
-				  AND column_name = 'content_tsv'
-			) THEN
-				ALTER TABLE embeddings
-				ADD COLUMN content_tsv TSVECTOR
-				GENERATED ALWAYS AS (to_tsvector('english', COALESCE(content, ''))) STORED;
-			END IF;
-		END $$;
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to normalize content_tsv column: %w", err)
 	}
 
 	// Create indexes for fast filtering
@@ -279,24 +142,26 @@ func (s *PostgresStore) InitSchema() error {
 		"CREATE INDEX IF NOT EXISTS idx_embeddings_user_id ON embeddings(user_id)",
 		"CREATE INDEX IF NOT EXISTS idx_embeddings_journal_id ON embeddings(journal_id)",
 		"CREATE INDEX IF NOT EXISTS idx_embeddings_user_journal ON embeddings(user_id, journal_id)",
-		"CREATE INDEX IF NOT EXISTS idx_embeddings_content_tsv ON embeddings USING GIN(content_tsv)",
 	}
 
 	for _, indexQuery := range indexes {
-		_, err = s.Pool.Exec(ctx, indexQuery)
+		_, err = s.DB.Exec(indexQuery)
 		if err != nil {
 			return fmt.Errorf("failed to create index: %w", err)
 		}
 	}
 
 	// Create HNSW index for performance
+	// "vector_cosine_ops" is for <=>
 	indexQuery := `
 		CREATE INDEX IF NOT EXISTS embeddings_embedding_idx 
 		ON embeddings 
 		USING hnsw (embedding vector_cosine_ops)
 	`
-	_, err = s.Pool.Exec(ctx, indexQuery)
+	_, err = s.DB.Exec(indexQuery)
 	if err != nil {
+		// HNSW index creation might fail if extension not fully set up
+		// Log but don't fail - the table is still usable
 		fmt.Printf("Warning: failed to create HNSW index: %v\n", err)
 	}
 
