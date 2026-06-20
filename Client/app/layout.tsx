@@ -4,7 +4,6 @@ import { Suspense } from 'react';
 import { Toaster } from '@/components/ui/sonner';
 import { ProgressBar } from '@/components/progress-bar';
 
-
 export const metadata: Metadata = {
   title: 'Mind Garden',
   description: 'A privacy-first, AI-powered journaling space',

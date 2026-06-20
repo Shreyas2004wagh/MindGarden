@@ -112,6 +112,7 @@ const Carousel = React.forwardRef<
       }
 
       let cancelled = false;
+
       queueMicrotask(() => {
         if (!cancelled) {
           onSelect(api);
