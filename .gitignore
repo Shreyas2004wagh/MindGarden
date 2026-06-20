@@ -3,12 +3,14 @@ Server/bin/
 Server/storage/
 Server/.env
 Server/.env.local
+Server/server-dev.log
+Server/.gocache/
+Server/.gotelemetry/
 
 # General
 .DS_Store
 node_modules/
 .next/
 Client/client-dev.log
-Server/server-dev.log
 
 .github/
